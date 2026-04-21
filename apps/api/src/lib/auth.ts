@@ -28,11 +28,14 @@ export async function requireUser(
     const { data: { user }, error } = await supabase.auth.getUser(token);
 
     if (error || !user) {
+      request.log.error({ error }, "Supabase auth.getUser failed");
       reply.code(401).send({ error: "Unauthorized" });
       return null;
     }
 
     // Upsert the user into the public schema so Prisma foreign keys work
+    request.log.info({ authUserId: user.id, authEmail: user.email }, "Upserting user from Supabase Auth");
+    
     await prisma.user.upsert({
       where: { id: user.id },
       update: {

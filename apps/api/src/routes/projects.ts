@@ -69,17 +69,26 @@ export async function projectRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.code(400).send({ error: "GitHub account is not connected" });
     }
 
+    const apiBaseUrl = process.env.API_BASE_URL ?? "";
+    const isLocalUrl = apiBaseUrl.includes("localhost") || apiBaseUrl.includes("127.0.0.1");
+
     let webhookId: number | null = null;
 
     try {
-      webhookId = await registerWebhook(repoFullName, user.githubToken);
+      if (!isLocalUrl) {
+        webhookId = await registerWebhook(repoFullName, user.githubToken);
+      } else {
+        request.log.warn("Skipping webhook registration: API_BASE_URL is localhost (not publicly reachable)");
+      }
+
+      const authenticatedRepoUrl = `https://x-access-token:${user.githubToken}@github.com/${repoFullName}.git`;
 
       const project = await prisma.project.create({
         data: {
           userId: authUser.id,
           name,
           slug,
-          repoUrl,
+          repoUrl: authenticatedRepoUrl,
           repoFullName,
           branch,
           webhookId,
@@ -97,8 +106,8 @@ export async function projectRoutes(fastify: FastifyInstance): Promise<void> {
         return reply.code(409).send({ error: "Project slug or repository is already in use" });
       }
 
-      request.log.error({ error }, "Failed to create project");
-      return reply.code(500).send({ error: "Failed to create project" });
+      request.log.error({ error: String(error) }, "Failed to create project");
+      return reply.code(500).send({ error: "Failed to create project: " + String(error) });
     }
   });
 

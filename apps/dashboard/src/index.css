@@ -72,6 +72,14 @@ a:hover {
   text-decoration: underline;
 }
 
+.project-card-link:hover {
+  text-decoration: none;
+  border-color: #d1d5db;
+  box-shadow: var(--shadow-lg);
+  transform: translateY(-3px);
+  background: linear-gradient(180deg, #ffffff 0%, #fafafa 100%);
+}
+
 /* Layout Elements */
 .container {
   max-width: 1024px;

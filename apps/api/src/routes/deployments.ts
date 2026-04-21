@@ -150,8 +150,8 @@ export async function deploymentRoutes(fastify: FastifyInstance): Promise<void> 
       return reply.code(404).send({ error: "Project not found" });
     }
 
-    const branch = request.body.branch || project.branch;
-    const commitSha = request.body.commitSha || `manual-${Date.now()}`;
+    const branch = request.body.branch?.trim() || project.branch || "main";
+    const commitSha = request.body.commitSha?.trim() || branch;
 
     const deployment = await prisma.deployment.create({
       data: {
