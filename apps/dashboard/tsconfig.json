@@ -5,7 +5,8 @@
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
     "target": "ES2022",
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    "noEmit": true
   },
   "include": ["src"]
 }

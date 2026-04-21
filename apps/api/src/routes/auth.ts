@@ -111,4 +111,22 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post("/auth/logout", async (_request, reply) => {
     return reply.send({ success: true });
   });
+
+  fastify.post<{ Body: { providerToken: string } }>("/auth/sync", async (request, reply) => {
+    const authUser = await requireUser(request, reply);
+    if (!authUser) return;
+
+    const { providerToken } = request.body;
+    if (!providerToken) {
+      return reply.code(400).send({ error: "Missing providerToken" });
+    }
+
+    await prisma.user.update({
+      where: { id: authUser.id },
+      data: { githubToken: providerToken },
+    });
+
+    return reply.send({ success: true });
+  });
 }
+
