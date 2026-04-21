@@ -5,9 +5,10 @@ RUN apk add --no-cache git
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci --omit=dev
+RUN npm ci
 
 COPY . .
 RUN npm run build
+RUN npm prune --omit=dev
 
 CMD ["node", "dist/index.js"]

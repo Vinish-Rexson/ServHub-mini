@@ -6,7 +6,7 @@ This repository is being implemented from the spec in `vercel-clone-spec.md`.
 
 - Phase 0 complete: monorepo bootstrap
 - Phase 1 core complete: API skeleton with Prisma schema, auth/project/deployment routes, webhook validation, and SQS producer wiring
-- Phase 2 pending: builder worker implementation
+- Phase 2 core complete: builder worker pipeline (SQS consume, git clone/build, Supabase logs/status, S3 upload)
 - Phase 3 pending: AWS runtime wiring (SQS, S3, ECS, IAM)
 - Phase 4 pending: dashboard pages + realtime subscriptions
 
