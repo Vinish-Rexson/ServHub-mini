@@ -1,22 +1,10 @@
-import React from "react";
-import { createRoot } from "react-dom/client";
+import React from 'react'
+import ReactDOM from 'react-dom/client'
+import App from './App'
+import './index.css'
 
-function App() {
-  return (
-    <main style={{ fontFamily: "sans-serif", padding: "2rem" }}>
-      <h1>Vercel Clone Dashboard</h1>
-      <p>Frontend implementation starts in Phase 4.</p>
-    </main>
-  );
-}
-
-const rootElement = document.getElementById("root");
-if (!rootElement) {
-  throw new Error("Missing #root element");
-}
-
-createRoot(rootElement).render(
+ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <App />
-  </React.StrictMode>
-);
+  </React.StrictMode>,
+)
