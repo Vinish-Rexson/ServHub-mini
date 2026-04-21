@@ -99,6 +99,25 @@ export async function getGitHubUser(accessToken: string): Promise<GitHubUser> {
   };
 }
 
+export type GitHubRepo = {
+  id: number;
+  name: string;
+  full_name: string;
+  private: boolean;
+  html_url: string;
+  updated_at: string;
+  default_branch?: string;
+};
+
+export async function getGitHubRepos(accessToken: string): Promise<GitHubRepo[]> {
+  // Fetch up to 100 repositories sorted by last updated
+  const repos = await githubRequest<GitHubRepo[]>(
+    "https://api.github.com/user/repos?sort=updated&per_page=100",
+    accessToken
+  );
+  return repos;
+}
+
 export async function registerWebhook(repoFullName: string, accessToken: string): Promise<number> {
   const apiBaseUrl = getRequiredEnv("API_BASE_URL");
   const webhookSecret = getRequiredEnv("GITHUB_WEBHOOK_SECRET");

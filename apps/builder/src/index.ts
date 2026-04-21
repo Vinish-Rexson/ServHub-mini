@@ -5,11 +5,16 @@ import {
 	SQSClient,
 	type Message,
 } from "@aws-sdk/client-sqs";
-import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import {
+	DeleteObjectsCommand,
+	ListObjectsV2Command,
+	PutObjectCommand,
+	S3Client,
+} from "@aws-sdk/client-s3";
 import { createClient } from "@supabase/supabase-js";
 import { spawn } from "node:child_process";
 import { createReadStream } from "node:fs";
-import { mkdir, readdir } from "node:fs/promises";
+import { mkdir, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { lookup } from "mime-types";
@@ -40,6 +45,12 @@ type BuildJob = {
 type ActiveJobContext = {
 	deploymentId: string;
 	receiptHandle: string;
+};
+
+type DeploymentRow = {
+	id: string;
+	s3_key?: string | null;
+	deployed_url?: string | null;
 };
 
 const REGION = process.env.AWS_REGION ?? "ap-south-1";
@@ -276,18 +287,145 @@ async function walkDirectory(dirPath: string): Promise<string[]> {
 	return nested.flat();
 }
 
+function rewriteStaticPathsForDeployment(content: string, deploymentPathPrefix: string): string {
+	let rewritten = content;
+
+	// Keep static assets within the same deployment prefix so CloudFront path-based URLs work.
+	rewritten = rewritten.replace(/(["'`])\/assets\//g, `$1${deploymentPathPrefix}/assets/`);
+	rewritten = rewritten.replace(/(["'`])\/static\//g, `$1${deploymentPathPrefix}/static/`);
+	rewritten = rewritten.replace(/(["'`])\/vite\.svg\b/g, `$1${deploymentPathPrefix}/vite.svg`);
+	rewritten = rewritten.replace(/(["'`])\/favicon\.ico\b/g, `$1${deploymentPathPrefix}/favicon.ico`);
+	rewritten = rewritten.replace(/url\(\s*\/assets\//g, `url(${deploymentPathPrefix}/assets/`);
+	rewritten = rewritten.replace(/url\(\s*\/static\//g, `url(${deploymentPathPrefix}/static/`);
+	rewritten = rewritten.replace(/url\(\s*\/vite\.svg\b/g, `url(${deploymentPathPrefix}/vite.svg`);
+
+	return rewritten;
+}
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+	const chunks: T[][] = [];
+
+	for (let index = 0; index < items.length; index += size) {
+		chunks.push(items.slice(index, index + size));
+	}
+
+	return chunks;
+}
+
+async function listObjectKeys(prefix: string): Promise<string[]> {
+	const keys: string[] = [];
+	let continuationToken: string | undefined;
+
+	do {
+		const response = await s3.send(
+			new ListObjectsV2Command({
+				Bucket: BUCKET,
+				Prefix: prefix,
+				ContinuationToken: continuationToken,
+			})
+		);
+
+		for (const object of response.Contents ?? []) {
+			if (object.Key) {
+				keys.push(object.Key);
+			}
+		}
+
+		continuationToken = response.IsTruncated ? response.NextContinuationToken : undefined;
+	} while (continuationToken);
+
+	return keys;
+}
+
+async function deleteObjects(keys: string[]): Promise<void> {
+	for (const chunk of chunkArray(keys, 1000)) {
+		await s3.send(
+			new DeleteObjectsCommand({
+				Bucket: BUCKET,
+				Delete: {
+					Objects: chunk.map((key) => ({ Key: key })),
+					Quiet: true,
+				},
+			})
+		);
+	}
+}
+
+async function cleanupOldDeployments(projectId: string, currentDeploymentId: string): Promise<void> {
+	const { data, error } = await supabase
+		.from("deployments")
+		.select("id,s3_key,deployed_url")
+		.eq("project_id", projectId)
+		.neq("id", currentDeploymentId);
+
+	if (error) {
+		console.error("Failed to fetch old deployments for cleanup:", error.message);
+		return;
+	}
+
+	for (const row of (data ?? []) as DeploymentRow[]) {
+		const oldDeploymentId = row.id;
+		if (!oldDeploymentId) {
+			continue;
+		}
+
+		if (typeof row.s3_key === "string" && row.s3_key.length > 0) {
+			try {
+				const keys = await listObjectKeys(row.s3_key);
+				if (keys.length > 0) {
+					await deleteObjects(keys);
+					await insertBuildLog(
+						currentDeploymentId,
+						`Deleted ${keys.length} old artifact(s) from deployment ${oldDeploymentId}`
+					);
+				}
+			} catch (cleanupError) {
+				console.error(`Failed deleting artifacts for deployment ${oldDeploymentId}:`, cleanupError);
+			}
+		}
+
+		const { error: clearError } = await supabase
+			.from("deployments")
+			.update({ s3_key: null, deployed_url: null })
+			.eq("id", oldDeploymentId);
+
+		if (clearError) {
+			console.error(`Failed clearing live URL for deployment ${oldDeploymentId}:`, clearError.message);
+		}
+	}
+}
+
 async function uploadDirectory(deploymentId: string, sourceDir: string, s3Prefix: string): Promise<void> {
 	const files = await walkDirectory(sourceDir);
+	const deploymentPathPrefix = `/${s3Prefix}`;
 
 	for (const filePath of files) {
 		const fileKey = `${s3Prefix}/${relative(sourceDir, filePath).replace(/\\/g, "/")}`;
 		const contentType = lookup(filePath);
+		const lowerCasePath = filePath.toLowerCase();
+		const shouldRewrite =
+			lowerCasePath.endsWith(".html") ||
+			lowerCasePath.endsWith(".js") ||
+			lowerCasePath.endsWith(".css");
+
+		let body: Buffer | ReturnType<typeof createReadStream>;
+		if (shouldRewrite) {
+			const original = await readFile(filePath, "utf8");
+			const rewritten = rewriteStaticPathsForDeployment(original, deploymentPathPrefix);
+			if (rewritten !== original) {
+				await insertBuildLog(deploymentId, `Rewrote asset URLs in ${fileKey} for deployment path prefix`);
+			}
+
+			body = Buffer.from(rewritten, "utf8");
+		} else {
+			body = createReadStream(filePath);
+		}
 
 		await s3.send(
 			new PutObjectCommand({
 				Bucket: BUCKET,
 				Key: fileKey,
-				Body: createReadStream(filePath),
+				Body: body,
 				ContentType: typeof contentType === "string" ? contentType : "application/octet-stream",
 			})
 		);
@@ -296,8 +434,14 @@ async function uploadDirectory(deploymentId: string, sourceDir: string, s3Prefix
 	}
 }
 
-function deploymentUrl(projectSlug: string): string {
-	return `https://${projectSlug}.${PLATFORM_DOMAIN}`;
+function deploymentUrl(projectSlug: string, deploymentId: string): string {
+	const normalizedDomain = PLATFORM_DOMAIN.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+
+	if (normalizedDomain.endsWith(".cloudfront.net")) {
+		return `https://${normalizedDomain}/deployments/${deploymentId}/index.html`;
+	}
+
+	return `https://${projectSlug}.${normalizedDomain}`;
 }
 
 async function processBuildMessage(message: Message): Promise<void> {
@@ -363,12 +507,14 @@ async function processBuildMessage(message: Message): Promise<void> {
 		const s3Key = `deployments/${job.deploymentId}`;
 		await uploadDirectory(job.deploymentId, outputDir, s3Key);
 
-		const deployedUrl = deploymentUrl(job.projectSlug);
+		const deployedUrl = deploymentUrl(job.projectSlug, job.deploymentId);
 		await updateDeploymentStatus(job.deploymentId, "READY", {
 			s3_key: s3Key,
 			deployed_url: deployedUrl,
 			finished_at: nowIso(),
 		});
+
+		await cleanupOldDeployments(job.projectId, job.deploymentId);
 
 		await insertBuildLog(job.deploymentId, `Build complete. Live at ${deployedUrl}`);
 

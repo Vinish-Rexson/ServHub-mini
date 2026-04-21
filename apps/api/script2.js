@@ -1,0 +1,1 @@
+require('dotenv').config(); const { createClient } = require('@supabase/supabase-js'); const client = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY); client.auth.admin.listUsers().then(res => console.log(res.data.users.map(u => ({ id: u.id, email: u.email }))))

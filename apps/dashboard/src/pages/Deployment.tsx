@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ArrowLeft, ExternalLink, Loader2 } from "lucide-react";
 import { fetchApi } from "../lib/api";
+import { resolveDeploymentUrl } from "../lib/deploymentUrl";
 import { supabase } from "../lib/supabase";
 
 type Deployment = {
@@ -21,6 +22,52 @@ type BuildLog = {
   timestamp: string;
 };
 
+type DeploymentResponse = Deployment & {
+  buildLogs?: BuildLog[];
+};
+
+type DeploymentRealtimeRow = {
+  status?: string;
+  deployed_url?: string | null;
+  project_id?: string;
+  commit_sha?: string;
+  created_at?: string;
+};
+
+type BuildLogRealtimeRow = {
+  id?: string;
+  message?: string;
+  level?: string;
+  timestamp?: string;
+};
+
+function mergeDeploymentRealtimeUpdate(current: Deployment, row: DeploymentRealtimeRow): Deployment {
+  return {
+    ...current,
+    status: typeof row.status === "string" ? row.status : current.status,
+    deployedUrl: typeof row.deployed_url === "string" || row.deployed_url === null ? row.deployed_url : current.deployedUrl,
+    projectId: typeof row.project_id === "string" ? row.project_id : current.projectId,
+    commitSha: typeof row.commit_sha === "string" ? row.commit_sha : current.commitSha,
+    createdAt: typeof row.created_at === "string" ? row.created_at : current.createdAt,
+  };
+}
+
+function normalizeRealtimeBuildLog(row: BuildLogRealtimeRow): BuildLog | null {
+  if (typeof row.id !== "string" || typeof row.message !== "string") {
+    return null;
+  }
+
+  const normalizedLevel: BuildLog["level"] =
+    row.level === "WARN" || row.level === "ERROR" || row.level === "INFO" ? row.level : "INFO";
+
+  return {
+    id: row.id,
+    message: row.message,
+    level: normalizedLevel,
+    timestamp: typeof row.timestamp === "string" ? row.timestamp : new Date().toISOString(),
+  };
+}
+
 export const DeploymentView: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const [deployment, setDeployment] = useState<Deployment | null>(null);
@@ -29,16 +76,19 @@ export const DeploymentView: React.FC = () => {
   const terminalRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!id) return;
+    if (!id) {
+      setIsLoading(false);
+      return;
+    }
 
     let isSubscribed = true;
 
     const loadData = async () => {
       try {
-        const depData = await fetchApi(`/deployments/${id}`);
+        const depData = await fetchApi<DeploymentResponse>(`/deployments/${id}`);
         if (isSubscribed) {
           setDeployment(depData);
-          setLogs(depData.buildLogs || []);
+          setLogs(Array.isArray(depData.buildLogs) ? depData.buildLogs : []);
         }
       } catch (error) {
         console.error("Failed to load deployment:", error);
@@ -57,7 +107,8 @@ export const DeploymentView: React.FC = () => {
         { event: "UPDATE", schema: "public", table: "deployments", filter: `id=eq.${id}` },
         (payload) => {
           if (isSubscribed) {
-            setDeployment((prev) => prev ? { ...prev, ...payload.new as any } : null);
+            const row = payload.new as DeploymentRealtimeRow;
+            setDeployment((prev) => (prev ? mergeDeploymentRealtimeUpdate(prev, row) : null));
           }
         }
       )
@@ -71,7 +122,10 @@ export const DeploymentView: React.FC = () => {
         { event: "INSERT", schema: "public", table: "build_logs", filter: `deployment_id=eq.${id}` },
         (payload) => {
           if (isSubscribed) {
-            setLogs((prev) => [...prev, payload.new as BuildLog]);
+            const parsed = normalizeRealtimeBuildLog(payload.new as BuildLogRealtimeRow);
+            if (parsed) {
+              setLogs((prev) => [...prev, parsed]);
+            }
           }
         }
       )
@@ -107,6 +161,8 @@ export const DeploymentView: React.FC = () => {
     return <span className={`badge badge-${s}`}>{status}</span>;
   };
 
+  const liveUrl = resolveDeploymentUrl(deployment.id, deployment.deployedUrl);
+
   return (
     <div className="container">
       <div className="mb-8 flex items-center justify-between">
@@ -123,8 +179,8 @@ export const DeploymentView: React.FC = () => {
         </div>
         <div className="flex items-center gap-4">
           {getStatusBadge(deployment.status)}
-          {deployment.deployedUrl && (
-            <a href={deployment.deployedUrl} target="_blank" rel="noopener noreferrer" className="btn btn-primary">
+          {liveUrl && (
+            <a href={liveUrl} target="_blank" rel="noopener noreferrer" className="btn btn-primary">
               Visit Live Site <ExternalLink size={16} />
             </a>
           )}

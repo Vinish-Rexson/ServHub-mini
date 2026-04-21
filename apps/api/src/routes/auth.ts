@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { requireUser } from "../lib/auth";
 import { getRequiredEnv } from "../lib/env";
 import { prisma } from "../lib/prisma";
-import { exchangeCodeForToken, getGitHubUser } from "../services/github";
+import { exchangeCodeForToken, getGitHubUser, getGitHubRepos } from "../services/github";
 
 type GitHubCallbackQuery = {
   code?: string;
@@ -127,6 +127,28 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     });
 
     return reply.send({ success: true });
+  });
+
+  fastify.get("/auth/repos", async (request, reply) => {
+    const authUser = await requireUser(request, reply);
+    if (!authUser) return;
+
+    const user = await prisma.user.findUnique({
+      where: { id: authUser.id },
+      select: { githubToken: true },
+    });
+
+    if (!user?.githubToken) {
+      return reply.code(400).send({ error: "GitHub account is not connected" });
+    }
+
+    try {
+      const repos = await getGitHubRepos(user.githubToken);
+      return reply.send(repos);
+    } catch (error) {
+      request.log.error({ error }, "Failed to fetch GitHub repos");
+      return reply.code(500).send({ error: "Failed to fetch GitHub repositories" });
+    }
   });
 }
 
