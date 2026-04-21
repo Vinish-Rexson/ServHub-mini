@@ -12,6 +12,7 @@
     "prisma:deploy": "prisma migrate deploy"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1034.0",
     "@aws-sdk/client-sqs": "^3.785.0",
     "@fastify/cors": "^10.1.0",
     "@fastify/jwt": "^9.1.0",

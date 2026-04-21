@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, ExternalLink, GitBranch, GitCommit, Loader2 } from "lucide-react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { ArrowLeft, ExternalLink, GitBranch, GitCommit, Loader2, Trash2 } from "lucide-react";
 import { fetchApi } from "../lib/api";
 import { resolveDeploymentUrl } from "../lib/deploymentUrl";
 
@@ -23,6 +23,7 @@ type Project = {
 
 export const ProjectDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const requestSeqRef = useRef(0);
   const [project, setProject] = useState<Project | null>(null);
   const [deployments, setDeployments] = useState<Deployment[]>([]);
@@ -30,6 +31,8 @@ export const ProjectDetails: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isDeploying, setIsDeploying] = useState(false);
   const [deployError, setDeployError] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   useEffect(() => {
     if (!id) {
@@ -88,6 +91,21 @@ export const ProjectDetails: React.FC = () => {
     );
   }
 
+  const handleDeleteProject = async () => {
+    if (!project) return;
+    try {
+      setIsDeleting(true);
+      await fetchApi(`/projects/${project.id}`, { method: "DELETE" });
+      navigate("/");
+    } catch (error) {
+      console.error("Failed to delete project:", error);
+      alert(error instanceof Error ? error.message : "Failed to delete project");
+    } finally {
+      setIsDeleting(false);
+      setConfirmDelete(false);
+    }
+  };
+
   const handleDeploy = async () => {
     const isRedeploy = deployments.length > 0;
 
@@ -117,16 +135,57 @@ export const ProjectDetails: React.FC = () => {
     return <span className={`badge badge-${s}`}>{status}</span>;
   };
 
+  const latestLiveDeployment = deployments.find(
+    (d) => d.status === "READY" && resolveDeploymentUrl(d.id, d.deployedUrl) !== null
+  ) ?? null;
+  const latestLiveUrl = latestLiveDeployment
+    ? resolveDeploymentUrl(latestLiveDeployment.id, latestLiveDeployment.deployedUrl)
+    : null;
+
   return (
     <div className="container">
       <div className="mb-8 flex items-center gap-4">
         <Link to="/" className="btn btn-outline" style={{ padding: "0.5rem" }}>
           <ArrowLeft size={20} />
         </Link>
-        <div>
+        <div style={{ flex: 1 }}>
           <h1 style={{ margin: 0 }}>{project.name}</h1>
           <p className="text-muted" style={{ margin: 0 }}>{project.repoFullName}</p>
         </div>
+        {latestLiveUrl && (
+          <a
+            href={latestLiveUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn btn-primary"
+          >
+            Visit Live Site <ExternalLink size={14} />
+          </a>
+        )}
+        {confirmDelete ? (
+          <div className="flex items-center gap-2">
+            <span className="text-sm" style={{ color: "#dc2626" }}>Delete project &amp; all S3 data?</span>
+            <button
+              className="btn btn-outline"
+              style={{ borderColor: "#dc2626", color: "#dc2626" }}
+              onClick={handleDeleteProject}
+              disabled={isDeleting}
+            >
+              {isDeleting ? <Loader2 size={14} className="animate-spin" /> : "Yes, delete"}
+            </button>
+            <button className="btn btn-outline" onClick={() => setConfirmDelete(false)} disabled={isDeleting}>
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <button
+            className="btn btn-outline"
+            style={{ borderColor: "#dc2626", color: "#dc2626" }}
+            onClick={() => setConfirmDelete(true)}
+          >
+            <Trash2 size={14} /> Delete
+          </button>
+        )}
       </div>
 
       <div className="card">
@@ -164,6 +223,7 @@ export const ProjectDetails: React.FC = () => {
           <div className="flex flex-col gap-4">
             {deployments.map((dep) => {
               const liveUrl = resolveDeploymentUrl(dep.id, dep.deployedUrl);
+              const isLatestLive = latestLiveDeployment?.id === dep.id;
 
               return (
                 <div key={dep.id} className="flex items-center justify-between" style={{ padding: "1rem", border: "1px solid var(--border-color)", borderRadius: "var(--radius-md)" }}>
@@ -173,6 +233,9 @@ export const ProjectDetails: React.FC = () => {
                         {dep.commitMessage || `Commit ${dep.commitSha.slice(0, 7)}`}
                       </Link>
                       {getStatusBadge(dep.status)}
+                      {isLatestLive && (
+                        <span style={{ fontSize: "0.7rem", background: "var(--color-success, #22c55e)", color: "#fff", borderRadius: "4px", padding: "2px 7px", fontWeight: 600 }}>LIVE</span>
+                      )}
                     </div>
                     <div className="flex items-center gap-4 text-sm text-muted">
                       <span className="flex items-center gap-1"><GitBranch size={14} /> {dep.branch}</span>
@@ -181,7 +244,7 @@ export const ProjectDetails: React.FC = () => {
                     </div>
                   </div>
 
-                  {liveUrl && (
+                  {isLatestLive && liveUrl && (
                     <a href={liveUrl} target="_blank" rel="noopener noreferrer" className="btn btn-outline">
                       Visit <ExternalLink size={14} />
                     </a>
