@@ -1,0 +1,25 @@
+services:
+  api:
+    build: ./apps/api
+    ports:
+      - "3001:3001"
+    env_file:
+      - ./apps/api/.env
+    volumes:
+      - ./apps/api:/app
+      - /app/node_modules
+
+  dashboard:
+    build: ./apps/dashboard
+    ports:
+      - "3000:3000"
+    env_file:
+      - ./apps/dashboard/.env
+    volumes:
+      - ./apps/dashboard:/app
+      - /app/node_modules
+
+  builder:
+    build: ./apps/builder
+    env_file:
+      - ./apps/builder/.env

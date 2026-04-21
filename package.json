@@ -1,0 +1,17 @@
+{
+  "name": "vercel-clone",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:api": "npm run dev --workspace @vercel-clone/api",
+    "build:api": "npm run build --workspace @vercel-clone/api",
+    "prisma:generate": "npm run prisma:generate --workspace @vercel-clone/api",
+    "prisma:migrate": "npm run prisma:migrate --workspace @vercel-clone/api"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
