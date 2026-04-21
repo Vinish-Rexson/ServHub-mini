@@ -69,7 +69,8 @@ a {
 }
 
 a:hover {
-  text-decoration: underline;
+  text-decoration: none;
+  color: var(--accent-hover);
 }
 
 .project-card-link:hover {
@@ -140,6 +141,7 @@ button, .btn {
 
 .btn-primary:hover {
   background-color: var(--accent-hover);
+  color: white;
 }
 
 .btn-outline {

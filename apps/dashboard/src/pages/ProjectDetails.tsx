@@ -96,7 +96,7 @@ export const ProjectDetails: React.FC = () => {
     try {
       setIsDeleting(true);
       await fetchApi(`/projects/${project.id}`, { method: "DELETE" });
-      navigate("/");
+      navigate("/dashboard");
     } catch (error) {
       console.error("Failed to delete project:", error);
       alert(error instanceof Error ? error.message : "Failed to delete project");
@@ -145,7 +145,7 @@ export const ProjectDetails: React.FC = () => {
   return (
     <div className="container">
       <div className="mb-8 flex items-center gap-4">
-        <Link to="/" className="btn btn-outline" style={{ padding: "0.5rem" }}>
+        <Link to="/dashboard" className="btn btn-outline" style={{ padding: "0.5rem" }}>
           <ArrowLeft size={20} />
         </Link>
         <div style={{ flex: 1 }}>
@@ -228,7 +228,7 @@ export const ProjectDetails: React.FC = () => {
               return (
                 <div key={dep.id} className="flex items-center justify-between" style={{ padding: "1rem", border: "1px solid var(--border-color)", borderRadius: "var(--radius-md)" }}>
                   <div className="flex flex-col gap-2">
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
                       <Link to={`/deployments/${dep.id}`} className="font-medium" style={{ fontSize: "1.125rem" }}>
                         {dep.commitMessage || `Commit ${dep.commitSha.slice(0, 7)}`}
                       </Link>
