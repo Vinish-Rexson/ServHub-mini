@@ -1,0 +1,44 @@
+{
+  "family": "vercel-clone-builder",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "networkMode": "awsvpc",
+  "cpu": "1024",
+  "memory": "2048",
+  "taskRoleArn": "arn:aws:iam::<AWS_ACCOUNT_ID>:role/vercel-clone-builder-task-role",
+  "executionRoleArn": "arn:aws:iam::<AWS_ACCOUNT_ID>:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "builder",
+      "image": "<AWS_ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/vercel-clone-builder:latest",
+      "essential": true,
+      "environment": [
+        { "name": "AWS_REGION", "value": "<REGION>" },
+        { "name": "SQS_QUEUE_URL", "value": "https://sqs.<REGION>.amazonaws.com/<AWS_ACCOUNT_ID>/<SQS_QUEUE_NAME>" },
+        { "name": "S3_BUCKET_NAME", "value": "<S3_BUCKET_NAME>" },
+        { "name": "PLATFORM_DOMAIN", "value": "<PLATFORM_DOMAIN>" },
+        { "name": "SQS_VISIBILITY_TIMEOUT_SECONDS", "value": "600" },
+        { "name": "SQS_WAIT_TIME_SECONDS", "value": "20" }
+      ],
+      "secrets": [
+        {
+          "name": "SUPABASE_URL",
+          "valueFrom": "arn:aws:ssm:<REGION>:<AWS_ACCOUNT_ID>:parameter/vercel-clone/builder/supabase-url"
+        },
+        {
+          "name": "SUPABASE_SERVICE_ROLE_KEY",
+          "valueFrom": "arn:aws:ssm:<REGION>:<AWS_ACCOUNT_ID>:parameter/vercel-clone/builder/supabase-service-role-key"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/vercel-clone-builder",
+          "awslogs-region": "<REGION>",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}
