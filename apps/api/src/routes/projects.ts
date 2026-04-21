@@ -3,6 +3,45 @@ import type { FastifyInstance } from "fastify";
 import { requireUser } from "../lib/auth";
 import { prisma } from "../lib/prisma";
 import { registerWebhook, removeWebhook } from "../services/github";
+import { DeleteObjectsCommand, ListObjectsV2Command, S3Client } from "@aws-sdk/client-s3";
+
+const s3 = new S3Client({ region: process.env.AWS_REGION ?? "ap-south-1" });
+const S3_BUCKET = process.env.S3_BUCKET_NAME ?? "";
+
+async function deleteS3Prefix(prefix: string): Promise<void> {
+  if (!S3_BUCKET || !prefix) return;
+
+  const keys: string[] = [];
+  let continuationToken: string | undefined;
+
+  do {
+    const res = await s3.send(
+      new ListObjectsV2Command({
+        Bucket: S3_BUCKET,
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+      })
+    );
+    for (const obj of res.Contents ?? []) {
+      if (obj.Key) keys.push(obj.Key);
+    }
+    continuationToken = res.IsTruncated ? res.NextContinuationToken : undefined;
+  } while (continuationToken);
+
+  if (keys.length === 0) return;
+
+  for (let i = 0; i < keys.length; i += 1000) {
+    await s3.send(
+      new DeleteObjectsCommand({
+        Bucket: S3_BUCKET,
+        Delete: {
+          Objects: keys.slice(i, i + 1000).map((k) => ({ Key: k })),
+          Quiet: true,
+        },
+      })
+    );
+  }
+}
 
 type CreateProjectBody = {
   name: string;
@@ -148,6 +187,11 @@ export async function projectRoutes(fastify: FastifyInstance): Promise<void> {
         id: request.params.id,
         userId: authUser.id,
       },
+      include: {
+        deployments: {
+          select: { id: true, s3Key: true },
+        },
+      },
     });
 
     if (!project) {
@@ -165,6 +209,20 @@ export async function projectRoutes(fastify: FastifyInstance): Promise<void> {
       });
     }
 
+    // Delete all S3 artifacts for every deployment under this project
+    const s3Keys = project.deployments
+      .map((d) => d.s3Key)
+      .filter((k): k is string => typeof k === "string" && k.length > 0);
+
+    await Promise.allSettled(
+      s3Keys.map((key) =>
+        deleteS3Prefix(key).catch((err) =>
+          request.log.warn({ err, key }, "Failed to delete S3 artifacts for deployment")
+        )
+      )
+    );
+
+    // Deleting the project cascades to deployments and build_logs via FK
     await prisma.project.delete({
       where: { id: project.id },
     });

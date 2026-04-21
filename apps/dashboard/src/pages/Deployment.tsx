@@ -74,30 +74,37 @@ export const DeploymentView: React.FC = () => {
   const [logs, setLogs] = useState<BuildLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const terminalRef = useRef<HTMLDivElement>(null);
+  // Use a ref so React StrictMode's double-effect invocation doesn't
+  // block setIsLoading(false) via a stale closure value.
+  const mountedRef = useRef(true);
 
   useEffect(() => {
+    mountedRef.current = true;
+
     if (!id) {
       setIsLoading(false);
       return;
     }
 
-    let isSubscribed = true;
+    setIsLoading(true);
+    setDeployment(null);
+    setLogs([]);
 
     const loadData = async () => {
       try {
         const depData = await fetchApi<DeploymentResponse>(`/deployments/${id}`);
-        if (isSubscribed) {
+        if (mountedRef.current) {
           setDeployment(depData);
           setLogs(Array.isArray(depData.buildLogs) ? depData.buildLogs : []);
         }
       } catch (error) {
         console.error("Failed to load deployment:", error);
       } finally {
-        if (isSubscribed) setIsLoading(false);
+        if (mountedRef.current) setIsLoading(false);
       }
     };
 
-    loadData();
+    void loadData();
 
     // Subscribe to deployment status changes
     const depSubscription = supabase
@@ -106,7 +113,7 @@ export const DeploymentView: React.FC = () => {
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "deployments", filter: `id=eq.${id}` },
         (payload) => {
-          if (isSubscribed) {
+          if (mountedRef.current) {
             const row = payload.new as DeploymentRealtimeRow;
             setDeployment((prev) => (prev ? mergeDeploymentRealtimeUpdate(prev, row) : null));
           }
@@ -121,7 +128,7 @@ export const DeploymentView: React.FC = () => {
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "build_logs", filter: `deployment_id=eq.${id}` },
         (payload) => {
-          if (isSubscribed) {
+          if (mountedRef.current) {
             const parsed = normalizeRealtimeBuildLog(payload.new as BuildLogRealtimeRow);
             if (parsed) {
               setLogs((prev) => [...prev, parsed]);
@@ -132,9 +139,9 @@ export const DeploymentView: React.FC = () => {
       .subscribe();
 
     return () => {
-      isSubscribed = false;
-      depSubscription.unsubscribe();
-      logsSubscription.unsubscribe();
+      mountedRef.current = false;
+      void depSubscription.unsubscribe();
+      void logsSubscription.unsubscribe();
     };
   }, [id]);
 
