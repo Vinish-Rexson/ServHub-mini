@@ -56,8 +56,14 @@ type ProjectParams = {
   id: string;
 };
 
+// Duck-type guard: works across all Prisma versions without importing the class
 function isUniqueConstraintError(error: unknown): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    "code" in error &&
+    (error as Record<string, unknown>).code === "P2002"
+  );
 }
 
 export async function projectRoutes(fastify: FastifyInstance): Promise<void> {
@@ -211,12 +217,12 @@ export async function projectRoutes(fastify: FastifyInstance): Promise<void> {
 
     // Delete all S3 artifacts for every deployment under this project
     const s3Keys = project.deployments
-      .map((d) => d.s3Key)
-      .filter((k): k is string => typeof k === "string" && k.length > 0);
+      .map((d: { id: string; s3Key: string | null }) => d.s3Key)
+      .filter((k: string | null): k is string => typeof k === "string" && k.length > 0);
 
     await Promise.allSettled(
-      s3Keys.map((key) =>
-        deleteS3Prefix(key).catch((err) =>
+      s3Keys.map((key: string) =>
+        deleteS3Prefix(key).catch((err: unknown) =>
           request.log.warn({ err, key }, "Failed to delete S3 artifacts for deployment")
         )
       )
