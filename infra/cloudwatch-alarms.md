@@ -12,12 +12,12 @@
 2. Builder service task count unexpectedly low
    - Metric: `RunningTaskCount`
    - Namespace: `ECS/ContainerInsights` (or ECS service metrics)
-   - ClusterName: `vercel-clone-cluster`
-   - ServiceName: `vercel-clone-builder-service`
+   - ClusterName: `servhub-mini-cluster`
+   - ServiceName: `servhub-mini-builder-service`
    - Threshold: `< 1` for `2 datapoints / 5 min`
 
 3. Builder failures in logs (optional but useful)
-   - Log metric filter on `/ecs/vercel-clone-builder`
+   - Log metric filter on `/ecs/servhub-mini-builder`
    - Pattern: `Build failed for deployment`
    - Alarm threshold: `>= 1` per 5 minutes
 

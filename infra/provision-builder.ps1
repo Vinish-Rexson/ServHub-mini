@@ -1,18 +1,22 @@
+param(
+  [bool]$SkipEcr = $true
+)
+
 $ErrorActionPreference='Stop'
 $PSNativeCommandUseErrorActionPreference=$true
 $env:AWS_PAGER=''
 
 $region='ap-south-1'
 $account='421454275395'
-$queue='vercel-clone-builds'
-$dlq='vercel-clone-builds-dlq'
-$bucket='vercel-clone-deployments-421454275395'
-$ecrRepo='vercel-clone-builder'
-$cluster='vercel-clone-cluster'
-$service='vercel-clone-builder-service'
-$taskRole='vercel-clone-builder-task-role'
+$queue='servhub-mini-builds'
+$dlq='servhub-mini-builds-dlq'
+$bucket='servhub-mini-deployments-421454275395'
+$ecrRepo='servhub-mini-builder'
+$cluster='servhub-mini-cluster'
+$service='servhub-mini-builder-service'
+$taskRole='servhub-mini-builder-task-role'
 $execRole='ecsTaskExecutionRole'
-$logGroup='/ecs/vercel-clone-builder'
+$logGroup='/ecs/servhub-mini-builder'
 $platformDomain='yourplatform.dev'
 $subnets=@('subnet-02b25e48c33b63045','subnet-0ddde69c866e57771','subnet-03a95dddadbdadbe1')
 $securityGroup='sg-0a6b765ef9cee0ce5'
@@ -48,14 +52,25 @@ Invoke-Step '2. S3 bucket setup' 'aws s3api head/create/versioning/public-block'
 }
 
 Invoke-Step '3. ECR repository' 'aws ecr describe/create/put-image-scanning-configuration' {
-  $repoJson=$null
-  try { $repoJson=aws ecr describe-repositories --repository-names $ecrRepo --region $region --output json|ConvertFrom-Json } catch {}
-  if(-not $repoJson){
-    $repoJson=aws ecr create-repository --repository-name $ecrRepo --image-scanning-configuration scanOnPush=true --region $region --output json|ConvertFrom-Json
-  } else {
-    aws ecr put-image-scanning-configuration --repository-name $ecrRepo --image-scanning-configuration scanOnPush=true --region $region | Out-Null
+  if ($SkipEcr) {
+    $state.ecrRepoUri = "$account.dkr.ecr.$region.amazonaws.com/$ecrRepo"
+    Write-Output 'STEP_INFO: ECR step skipped (SkipEcr=true)'
+    return
   }
-  $state.ecrRepoUri=$repoJson.repositories[0].repositoryUri
+
+  $repoUri = $null
+  try {
+    $repoUri = (aws ecr describe-repositories --repository-names $ecrRepo --region $region --query 'repositories[0].repositoryUri' --output text 2>$null).Trim()
+    if ($repoUri -eq 'None') { $repoUri = $null }
+  } catch {}
+
+  if (-not $repoUri) {
+    aws ecr create-repository --repository-name $ecrRepo --image-scanning-configuration scanOnPush=true --region $region | Out-Null
+    $repoUri = (aws ecr describe-repositories --repository-names $ecrRepo --region $region --query 'repositories[0].repositoryUri' --output text).Trim()
+  }
+
+  aws ecr put-image-scanning-configuration --repository-name $ecrRepo --image-scanning-configuration scanOnPush=true --region $region | Out-Null
+  $state.ecrRepoUri = $repoUri
 }
 
 Invoke-Step '4. ECS cluster' 'aws ecs describe-clusters/create-cluster' {
@@ -87,7 +102,7 @@ Invoke-Step '6. Task IAM role and inline policy' 'aws iam get/create/update role
   )}|ConvertTo-Json -Depth 8
   $polPath=Join-Path $PWD 'infra/task-inline-policy.json'
   Set-Content -Encoding utf8 $polPath $pol
-  aws iam put-role-policy --role-name $taskRole --policy-name 'vercel-clone-builder-inline' --policy-document ("file://"+$polPath) | Out-Null
+  aws iam put-role-policy --role-name $taskRole --policy-name 'servhub-mini-builder-inline' --policy-document ("file://"+$polPath) | Out-Null
 }
 
 Invoke-Step '7. Execution IAM role' 'aws iam get/create/update + attach managed policy + inline ssm access' {
@@ -106,7 +121,7 @@ Invoke-Step '7. Execution IAM role' 'aws iam get/create/update + attach managed 
         Sid = 'AllowBuilderSsmParameters'
         Effect = 'Allow'
         Action = @('ssm:GetParameter','ssm:GetParameters')
-        Resource = "arn:aws:ssm:$region:$account:parameter/vercel-clone/builder/*"
+        Resource = "arn:aws:ssm:${region}:${account}:parameter/servhub-mini/builder/*"
       },
       @{
         Sid = 'AllowKmsDecryptForSsm'
@@ -124,24 +139,24 @@ Invoke-Step '7. Execution IAM role' 'aws iam get/create/update + attach managed 
 
   $execInlinePath = Join-Path $PWD 'infra/exec-inline-policy.json'
   Set-Content -Encoding utf8 $execInlinePath $execInline
-  aws iam put-role-policy --role-name $execRole --policy-name 'vercel-clone-exec-ssm-inline' --policy-document ("file://"+$execInlinePath) | Out-Null
+  aws iam put-role-policy --role-name $execRole --policy-name 'servhub-mini-exec-ssm-inline' --policy-document ("file://"+$execInlinePath) | Out-Null
 
   $state.execRoleArn=if($r){$r.Role.Arn}else{(aws iam get-role --role-name $execRole --query 'Role.Arn' --output text).Trim()}
 }
 
 Invoke-Step '8. SSM parameters' 'aws ssm put-parameter/get-parameter' {
-  aws ssm put-parameter --name '/vercel-clone/builder/SUPABASE_URL' --type String --value 'https://xkldqliccvgrfnckrlyw.supabase.co' --overwrite --region $region | Out-Null
-  aws ssm put-parameter --name '/vercel-clone/builder/SUPABASE_SERVICE_ROLE_KEY' --type SecureString --value 'replace_with_service_role_key' --overwrite --region $region | Out-Null
-  $state.supabaseUrlArn=(aws ssm get-parameter --name '/vercel-clone/builder/SUPABASE_URL' --region $region --query 'Parameter.ARN' --output text).Trim()
-  $state.supabaseKeyArn=(aws ssm get-parameter --name '/vercel-clone/builder/SUPABASE_SERVICE_ROLE_KEY' --with-decryption --region $region --query 'Parameter.ARN' --output text).Trim()
+  aws ssm put-parameter --name '/servhub-mini/builder/SUPABASE_URL' --type String --value 'https://xkldqliccvgrfnckrlyw.supabase.co' --overwrite --region $region | Out-Null
+  aws ssm put-parameter --name '/servhub-mini/builder/SUPABASE_SERVICE_ROLE_KEY' --type SecureString --value 'replace_with_service_role_key' --overwrite --region $region | Out-Null
+  $state.supabaseUrlArn=(aws ssm get-parameter --name '/servhub-mini/builder/SUPABASE_URL' --region $region --query 'Parameter.ARN' --output text).Trim()
+  $state.supabaseKeyArn=(aws ssm get-parameter --name '/servhub-mini/builder/SUPABASE_SERVICE_ROLE_KEY' --with-decryption --region $region --query 'Parameter.ARN' --output text).Trim()
 }
 
 Invoke-Step '9. Render task definition JSON' 'write infra/ecs-task-definition.builder.rendered.json' {
   $td=[ordered]@{
-    family='vercel-clone-builder';networkMode='awsvpc';requiresCompatibilities=@('FARGATE');cpu='512';memory='1024';
+    family='servhub-mini-builder';networkMode='awsvpc';requiresCompatibilities=@('FARGATE');cpu='512';memory='1024';
     executionRoleArn=$state.execRoleArn;taskRoleArn=$state.taskRoleArn;
     containerDefinitions=@([ordered]@{
-      name='vercel-clone-builder';image=($state.ecrRepoUri+':latest');essential=$true;
+      name='servhub-mini-builder';image=($state.ecrRepoUri+':latest');essential=$true;
       environment=@(
         @{name='AWS_REGION';value=$region},
         @{name='SQS_QUEUE_URL';value=$state.mainQueueUrl},
@@ -165,16 +180,17 @@ Invoke-Step '10. Register task definition' 'aws ecs register-task-definition' {
 }
 
 Invoke-Step '11. Create/update ECS service' 'aws ecs describe-services/create-service/update-service' {
+  $desiredCount = if ($SkipEcr) { 0 } else { 1 }
   $sd=aws ecs describe-services --cluster $cluster --services $service --region $region --output json|ConvertFrom-Json
   $missing=$false
   if($sd.failures -and $sd.failures[0].reason -eq 'MISSING'){$missing=$true}
   if($missing -or -not $sd.services -or $sd.services.Count -eq 0){
-    $req=[ordered]@{cluster=$cluster;serviceName=$service;taskDefinition=$state.taskDefinitionArn;desiredCount=1;capacityProviderStrategy=@(@{capacityProvider='FARGATE_SPOT';weight=1},@{capacityProvider='FARGATE';weight=0;base=1});networkConfiguration=@{awsvpcConfiguration=@{subnets=$subnets;securityGroups=@($securityGroup);assignPublicIp='ENABLED'}}}
+    $req=[ordered]@{cluster=$cluster;serviceName=$service;taskDefinition=$state.taskDefinitionArn;desiredCount=$desiredCount;capacityProviderStrategy=@(@{capacityProvider='FARGATE_SPOT';weight=1},@{capacityProvider='FARGATE';weight=0;base=1});networkConfiguration=@{awsvpcConfiguration=@{subnets=$subnets;securityGroups=@($securityGroup);assignPublicIp='ENABLED'}}}
     $reqPath=Join-Path $PWD 'infra/ecs-service-create.json'
     $req|ConvertTo-Json -Depth 12|Set-Content -Encoding utf8 $reqPath
     aws ecs create-service --cli-input-json ("file://"+$reqPath) --region $region | Out-Null
   } else {
-    aws ecs update-service --cluster $cluster --service $service --task-definition $state.taskDefinitionArn --desired-count 1 --region $region | Out-Null
+    aws ecs update-service --cluster $cluster --service $service --task-definition $state.taskDefinitionArn --desired-count $desiredCount --region $region | Out-Null
   }
   $svc=aws ecs describe-services --cluster $cluster --services $service --region $region --query 'services[0].{arn:serviceArn,status:status}' --output json|ConvertFrom-Json
   $state.serviceArn=$svc.arn
@@ -182,7 +198,7 @@ Invoke-Step '11. Create/update ECS service' 'aws ecs describe-services/create-se
 }
 
 Invoke-Step '12. CloudWatch DLQ alarm' 'aws cloudwatch put-metric-alarm' {
-  $state.alarmName='vercel-clone-builds-dlq-visible'
+  $state.alarmName='servhub-mini-builds-dlq-visible'
   aws cloudwatch put-metric-alarm --alarm-name $state.alarmName --alarm-description 'DLQ has visible messages' --namespace 'AWS/SQS' --metric-name 'ApproximateNumberOfMessagesVisible' --dimensions Name=QueueName,Value=$dlq --statistic Average --period 300 --evaluation-periods 1 --threshold 1 --comparison-operator GreaterThanOrEqualToThreshold --treat-missing-data notBreaching --region $region | Out-Null
 }
 
@@ -208,6 +224,7 @@ try { if(-not $state.dlqArn -and $state.dlqUrl){$state.dlqArn=(aws sqs get-queue
 "TASK_ROLE_ARN={0}" -f $state.taskRoleArn
 "EXEC_ROLE_ARN={0}" -f $state.execRoleArn
 "ALARM_NAME={0}" -f $state.alarmName
+"ECR_SKIPPED={0}" -f $SkipEcr
 if($failures.Count -gt 0){
   '---FAILURES---'
   $failures | ForEach-Object { "STEP={0} | COMMAND={1} | ERROR={2}" -f $_.Step,$_.Command,$_.Error }

@@ -22,27 +22,29 @@ This checklist follows dependency order to avoid circular setup issues.
 1. Create policy from `iam-policies/api-role-policy.json`
 2. Attach to API runtime role (service running apps/api)
 3. Create policy from `iam-policies/builder-task-role-policy.json`
-4. Attach to `vercel-clone-builder-task-role`
+4. Attach to `servhub-mini-builder-task-role`
 5. Ensure execution role has `AmazonECSTaskExecutionRolePolicy`
 
 ## 4) Create SSM parameters for builder secrets
 
-1. `/vercel-clone/builder/supabase-url` (String)
-2. `/vercel-clone/builder/supabase-service-role-key` (SecureString)
+1. `/servhub-mini/builder/SUPABASE_URL` (String)
+2. `/servhub-mini/builder/SUPABASE_SERVICE_ROLE_KEY` (SecureString)
 
 ## 5) Build and push builder image to ECR
 
-1. Create ECR repo: `vercel-clone-builder`
+1. Create ECR repo: `servhub-mini-builder`
 2. Authenticate Docker to ECR
 3. Build image from `apps/builder`
 4. Push tag `latest`
+
+If you are skipping ECR for now, keep ECS service desired count at 0 and return to this section later.
 
 ## 6) Create ECS task definition and service
 
 1. Replace placeholders in `ecs-task-definition.builder.template.json`
 2. Register task definition
 3. Create ECS service:
-   - Cluster: `vercel-clone-cluster`
+   - Cluster: `servhub-mini-cluster`
    - Desired count: 1
    - Capacity provider strategy:
      - FARGATE_SPOT weight 1
@@ -53,7 +55,7 @@ This checklist follows dependency order to avoid circular setup issues.
 
 ## 7) CloudWatch logs and alarm baselines
 
-1. Create log group `/ecs/vercel-clone-builder`
+1. Create log group `/ecs/servhub-mini-builder`
 2. Set retention 7-14 days
 3. Create DLQ alarm (see `cloudwatch-alarms.md`)
 

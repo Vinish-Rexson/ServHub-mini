@@ -21,6 +21,13 @@ This folder contains deploy-ready JSON templates and runbooks for AWS runtime wi
 - `push-builder-image.ps1` - build/push builder Docker image and force ECS rollout
 - `check-ecs-builder.ps1` - quick ECS service status and recent events
 
+## Provisioning modes
+
+- Default mode skips ECR creation and sets ECS service desired count to 0:
+   - `./infra/provision-builder.ps1`
+- Full mode includes ECR flow and keeps ECS desired count at 1:
+   - `./infra/provision-builder.ps1 -SkipEcr $false`
+
 ## How to use
 
 1. Replace placeholders in templates:

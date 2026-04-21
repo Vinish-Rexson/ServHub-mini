@@ -2,8 +2,8 @@ $ErrorActionPreference = "Stop"
 $env:AWS_PAGER = ""
 
 $region = "ap-south-1"
-$cluster = "vercel-clone-cluster"
-$service = "vercel-clone-builder-service"
+$cluster = "servhub-mini-cluster"
+$service = "servhub-mini-builder-service"
 
 aws ecs describe-services `
   --region $region `
