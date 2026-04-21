@@ -8,7 +8,7 @@
         "sqs:GetQueueAttributes"
       ],
       "Effect": "Allow",
-      "Resource": "arn:aws:sqs:ap-south-1:421454275395:vercel-clone-builds"
+      "Resource": "arn:aws:sqs:ap-south-1:421454275395:servhub-mini-builds"
     },
     {
       "Action": [
@@ -17,14 +17,14 @@
         "s3:DeleteObject"
       ],
       "Effect": "Allow",
-      "Resource": "arn:aws:s3:::vercel-clone-deployments-421454275395/*"
+      "Resource": "arn:aws:s3:::servhub-mini-deployments-421454275395/*"
     },
     {
       "Action": [
         "s3:ListBucket"
       ],
       "Effect": "Allow",
-      "Resource": "arn:aws:s3:::vercel-clone-deployments-421454275395"
+      "Resource": "arn:aws:s3:::servhub-mini-deployments-421454275395"
     }
   ],
   "Version": "2012-10-17"

@@ -1,7 +1,7 @@
 {
-  "cluster": "vercel-clone-cluster",
-  "serviceName": "vercel-clone-builder-service",
-  "taskDefinition": "arn:aws:ecs:ap-south-1:421454275395:task-definition/vercel-clone-builder:1",
+  "cluster": "servhub-mini-cluster",
+  "serviceName": "servhub-mini-builder-service",
+  "taskDefinition": "arn:aws:ecs:ap-south-1:421454275395:task-definition/servhub-mini-builder:1",
   "desiredCount": 1,
   "capacityProviderStrategy": [
     {

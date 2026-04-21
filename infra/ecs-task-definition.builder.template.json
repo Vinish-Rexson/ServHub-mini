@@ -1,17 +1,17 @@
 {
-  "family": "vercel-clone-builder",
+  "family": "servhub-mini-builder",
   "requiresCompatibilities": [
     "FARGATE"
   ],
   "networkMode": "awsvpc",
   "cpu": "1024",
   "memory": "2048",
-  "taskRoleArn": "arn:aws:iam::<AWS_ACCOUNT_ID>:role/vercel-clone-builder-task-role",
+  "taskRoleArn": "arn:aws:iam::<AWS_ACCOUNT_ID>:role/servhub-mini-builder-task-role",
   "executionRoleArn": "arn:aws:iam::<AWS_ACCOUNT_ID>:role/ecsTaskExecutionRole",
   "containerDefinitions": [
     {
       "name": "builder",
-      "image": "<AWS_ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/vercel-clone-builder:latest",
+      "image": "<AWS_ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/servhub-mini-builder:latest",
       "essential": true,
       "environment": [
         { "name": "AWS_REGION", "value": "<REGION>" },
@@ -24,17 +24,17 @@
       "secrets": [
         {
           "name": "SUPABASE_URL",
-          "valueFrom": "arn:aws:ssm:<REGION>:<AWS_ACCOUNT_ID>:parameter/vercel-clone/builder/supabase-url"
+          "valueFrom": "arn:aws:ssm:<REGION>:<AWS_ACCOUNT_ID>:parameter/servhub-mini/builder/SUPABASE_URL"
         },
         {
           "name": "SUPABASE_SERVICE_ROLE_KEY",
-          "valueFrom": "arn:aws:ssm:<REGION>:<AWS_ACCOUNT_ID>:parameter/vercel-clone/builder/supabase-service-role-key"
+          "valueFrom": "arn:aws:ssm:<REGION>:<AWS_ACCOUNT_ID>:parameter/servhub-mini/builder/SUPABASE_SERVICE_ROLE_KEY"
         }
       ],
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
-          "awslogs-group": "/ecs/vercel-clone-builder",
+          "awslogs-group": "/ecs/servhub-mini-builder",
           "awslogs-region": "<REGION>",
           "awslogs-stream-prefix": "ecs"
         }

@@ -46,7 +46,7 @@ const REGION = process.env.AWS_REGION ?? "ap-south-1";
 const QUEUE_URL = process.env.SQS_QUEUE_URL;
 const BUCKET = process.env.S3_BUCKET_NAME;
 const PLATFORM_DOMAIN = process.env.PLATFORM_DOMAIN ?? "yourplatform.dev";
-const BUILD_ROOT = process.env.BUILD_ROOT_DIR ?? join(tmpdir(), "vercel-clone-builds");
+const BUILD_ROOT = process.env.BUILD_ROOT_DIR ?? join(tmpdir(), "servhub-mini-builds");
 const VISIBILITY_TIMEOUT_SECONDS = Number(process.env.SQS_VISIBILITY_TIMEOUT_SECONDS ?? "600");
 const WAIT_TIME_SECONDS = Number(process.env.SQS_WAIT_TIME_SECONDS ?? "20");
 

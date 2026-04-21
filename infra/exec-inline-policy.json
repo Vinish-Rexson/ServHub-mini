@@ -1,0 +1,27 @@
+{
+  "Statement": [
+    {
+      "Sid": "AllowBuilderSsmParameters",
+      "Effect": "Allow",
+      "Resource": "arn:aws:ssm:ap-south-1:421454275395:parameter/servhub-mini/builder/*",
+      "Action": [
+        "ssm:GetParameter",
+        "ssm:GetParameters"
+      ]
+    },
+    {
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "ssm.ap-south-1.amazonaws.com"
+        }
+      },
+      "Sid": "AllowKmsDecryptForSsm",
+      "Effect": "Allow",
+      "Resource": "*",
+      "Action": [
+        "kms:Decrypt"
+      ]
+    }
+  ],
+  "Version": "2012-10-17"
+}

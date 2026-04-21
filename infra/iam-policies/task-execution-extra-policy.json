@@ -19,7 +19,7 @@
         "logs:CreateLogStream",
         "logs:PutLogEvents"
       ],
-      "Resource": "arn:aws:logs:<REGION>:<AWS_ACCOUNT_ID>:log-group:/ecs/vercel-clone-builder:*"
+      "Resource": "arn:aws:logs:<REGION>:<AWS_ACCOUNT_ID>:log-group:/ecs/servhub-mini-builder:*"
     }
   ]
 }
