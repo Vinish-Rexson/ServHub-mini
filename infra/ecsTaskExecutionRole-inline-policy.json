@@ -1,0 +1,25 @@
+{
+  "Statement": [
+    {
+      "Sid": "AllowBuilderSSMParameters",
+      "Effect": "Allow",
+      "Resource": "arn:aws:ssm:ap-south-1:421454275395:parameter/vercel-clone/builder/*",
+      "Action": [
+        "ssm:GetParameter",
+        "ssm:GetParameters"
+      ]
+    },
+    {
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "ssm.ap-south-1.amazonaws.com"
+        }
+      },
+      "Sid": "AllowDecryptForSSM",
+      "Effect": "Allow",
+      "Resource": "*",
+      "Action": "kms:Decrypt"
+    }
+  ],
+  "Version": "2012-10-17"
+}

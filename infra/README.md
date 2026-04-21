@@ -17,6 +17,9 @@ This folder contains deploy-ready JSON templates and runbooks for AWS runtime wi
 - `aws-resource-checklist.md` - Ordered creation checklist with validation commands
 - `cloudwatch-alarms.md` - DLQ and worker health alarm recommendations
 - `env.production.template.md` - Production env mappings for API and Builder
+- `provision-builder.ps1` - idempotent AWS provisioning script for Phase 3 resources
+- `push-builder-image.ps1` - build/push builder Docker image and force ECS rollout
+- `check-ecs-builder.ps1` - quick ECS service status and recent events
 
 ## How to use
 

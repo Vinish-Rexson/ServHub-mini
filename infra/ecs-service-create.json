@@ -1,0 +1,30 @@
+{
+  "cluster": "vercel-clone-cluster",
+  "serviceName": "vercel-clone-builder-service",
+  "taskDefinition": "arn:aws:ecs:ap-south-1:421454275395:task-definition/vercel-clone-builder:1",
+  "desiredCount": 1,
+  "capacityProviderStrategy": [
+    {
+      "capacityProvider": "FARGATE_SPOT",
+      "weight": 1
+    },
+    {
+      "base": 1,
+      "capacityProvider": "FARGATE",
+      "weight": 0
+    }
+  ],
+  "networkConfiguration": {
+    "awsvpcConfiguration": {
+      "assignPublicIp": "ENABLED",
+      "subnets": [
+        "subnet-02b25e48c33b63045",
+        "subnet-0ddde69c866e57771",
+        "subnet-03a95dddadbdadbe1"
+      ],
+      "securityGroups": [
+        "sg-0a6b765ef9cee0ce5"
+      ]
+    }
+  }
+}

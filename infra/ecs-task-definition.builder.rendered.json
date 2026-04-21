@@ -1,0 +1,67 @@
+{
+  "family": "vercel-clone-builder",
+  "taskRoleArn": "arn:aws:iam::421454275395:role/vercel-clone-builder-task-role",
+  "executionRoleArn": "arn:aws:iam::421454275395:role/ecsTaskExecutionRole",
+  "networkMode": "awsvpc",
+  "containerDefinitions": [
+    {
+      "name": "vercel-clone-builder",
+      "image": "421454275395.dkr.ecr.ap-south-1.amazonaws.com/vercel-clone-builder:latest",
+      "cpu": 0,
+      "portMappings": [],
+      "essential": true,
+      "environment": [
+        {
+          "name": "AWS_REGION",
+          "value": "ap-south-1"
+        },
+        {
+          "name": "SQS_QUEUE_URL",
+          "value": "https://sqs.ap-south-1.amazonaws.com/421454275395/vercel-clone-builds"
+        },
+        {
+          "name": "S3_BUCKET_NAME",
+          "value": "vercel-clone-deployments-421454275395"
+        },
+        {
+          "name": "PLATFORM_DOMAIN",
+          "value": "yourplatform.dev"
+        },
+        {
+          "name": "SQS_VISIBILITY_TIMEOUT_SECONDS",
+          "value": "600"
+        },
+        {
+          "name": "SQS_WAIT_TIME_SECONDS",
+          "value": "20"
+        }
+      ],
+      "mountPoints": [],
+      "volumesFrom": [],
+      "secrets": [
+        {
+          "name": "SUPABASE_URL",
+          "valueFrom": "arn:aws:ssm:ap-south-1:421454275395:parameter/vercel-clone/builder/SUPABASE_URL"
+        },
+        {
+          "name": "SUPABASE_SERVICE_ROLE_KEY",
+          "valueFrom": "arn:aws:ssm:ap-south-1:421454275395:parameter/vercel-clone/builder/SUPABASE_SERVICE_ROLE_KEY"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/vercel-clone-builder",
+          "awslogs-region": "ap-south-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      },
+      "systemControls": []
+    }
+  ],
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "cpu": "512",
+  "memory": "1024"
+}

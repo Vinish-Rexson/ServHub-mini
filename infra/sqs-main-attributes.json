@@ -1,0 +1,1 @@
+{"ReceiveMessageWaitTimeSeconds":"20","MessageRetentionPeriod":"86400","RedrivePolicy":"{\"maxReceiveCount\":\"3\",\"deadLetterTargetArn\":\"arn:aws:sqs:ap-south-1:421454275395:vercel-clone-builds-dlq\"}","VisibilityTimeout":"600"}

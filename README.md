@@ -7,7 +7,8 @@ This repository is being implemented from the spec in `vercel-clone-spec.md`.
 - Phase 0 complete: monorepo bootstrap
 - Phase 1 core complete: API skeleton with Prisma schema, auth/project/deployment routes, webhook validation, and SQS producer wiring
 - Phase 2 core complete: builder worker pipeline (SQS consume, git clone/build, Supabase logs/status, S3 upload)
-- Phase 3 in progress: infra templates and runbooks added under `infra/` (IAM policies, ECS task template, alarms, deployment checklist)
+- Phase 3 provisioned in AWS: SQS, S3, ECR, ECS cluster/service, IAM roles, CloudWatch log group, and DLQ alarm are created
+- Phase 3 remaining action: push builder Docker image to ECR (requires Docker daemon running locally)
 - Phase 4 pending: dashboard pages + realtime subscriptions
 
 ## Monorepo structure
