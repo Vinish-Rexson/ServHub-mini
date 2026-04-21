@@ -1,0 +1,11 @@
+{
+  "deploymentId": "test-deploy-001",
+  "projectId":    "test-project-001",
+  "projectSlug":  "test-app",
+  "repoUrl":      "https://github.com/facebook/create-react-app",
+  "repoFullName": "facebook/create-react-app",
+  "branch":       "main",
+  "commitSha":    "HEAD",
+  "commitMessage": "integration test build",
+  "envVars": {}
+}
