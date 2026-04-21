@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { Plus, FolderGit2, Loader2 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { fetchApi } from "../lib/api";
+import { Logo } from "../components/Logo";
 
 type Project = {
   id: string;
@@ -158,7 +159,10 @@ export const Dashboard: React.FC = () => {
   return (
     <div className="container">
       <nav className="navbar" style={{ margin: "-2rem -2rem 2rem -2rem" }}>
-        <div className="nav-brand">ServHub</div>
+        <div className="nav-brand flex items-center gap-2">
+          <Logo size={24} />
+          ServHub
+        </div>
         <div className="flex items-center gap-4">
           <div className="text-sm text-muted">{user?.email}</div>
           <button className="btn btn-outline" onClick={signOut}>Logout</button>
