@@ -1,14 +1,39 @@
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "AllowSendBuildJobs",
-      "Effect": "Allow",
-      "Action": [
-        "sqs:SendMessage",
-        "sqs:GetQueueAttributes"
-      ],
-      "Resource": "arn:aws:sqs:ap-south-1:421454275395:servhub-mini-builds"
-    }
-  ]
+﻿{
+    "Version":  "2012-10-17",
+    "Statement":  [
+                      {
+                          "Effect":  "Allow",
+                          "Sid":  "AllowSendBuildJobs",
+                          "Resource":  "arn:aws:sqs:ap-south-1:421454275395:servhub-mini-builds",
+                          "Action":  [
+                                         "sqs:SendMessage",
+                                         "sqs:GetQueueAttributes"
+                                     ]
+                      },
+                      {
+                          "Effect":  "Allow",
+                          "Sid":  "AllowCloudWatchLogs",
+                          "Resource":  [
+                                           "arn:aws:logs:ap-south-1:421454275395:log-group:/servhub/*",
+                                           "arn:aws:logs:ap-south-1:421454275395:log-group:/servhub/*:log-stream:*"
+                                       ],
+                          "Action":  [
+                                         "logs:CreateLogGroup",
+                                         "logs:CreateLogStream",
+                                         "logs:PutLogEvents",
+                                         "logs:DescribeLogGroups",
+                                         "logs:DescribeLogStreams"
+                                     ]
+                      },
+                      {
+                          "Effect":  "Allow",
+                          "Sid":  "AllowCloudWatchMetrics",
+                          "Resource":  "*",
+                          "Action":  [
+                                         "cloudwatch:PutMetricData",
+                                         "cloudwatch:GetMetricStatistics",
+                                         "cloudwatch:ListMetrics"
+                                     ]
+                      }
+                  ]
 }

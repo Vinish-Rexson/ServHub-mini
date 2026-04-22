@@ -34,6 +34,9 @@ $ECR_BASE        = "$AWS_ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com"
 
 $S3_BUCKET       = "servhub-deployments-prod"
 
+$CW_LOG_API      = "/servhub/api"
+$CW_LOG_BUILDER  = "/servhub/builder"
+
 # ── HELPERS ───────────────────────────────────────────────────────────────────
 function Log($msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
 function Ok($msg)  { Write-Host "    OK: $msg" -ForegroundColor Green }
@@ -269,6 +272,7 @@ S3_BUCKET_NAME=$S3_BUCKET
 GITHUB_CLIENT_ID=Ov23liPayart2aVDYT6q
 GITHUB_CLIENT_SECRET=9caaa64026e26f388d020399b7514827775e6642
 GITHUB_WEBHOOK_SECRET=da64958975200d0867a7c16782d0cfe2696fb7e394743fef66f095a1951329bd
+API_BASE_URL=https://$API_DOMAIN
 PLATFORM_DOMAIN=$DOMAIN
 PORT=3001
 HOST=0.0.0.0
@@ -278,6 +282,22 @@ $envContent | ssh -i $KEY_PATH -o StrictHostKeyChecking=no "ubuntu@$EC2_IP" "sud
 Ok "Environment file written"
 
 # ── 4e. ECR Login + Pull + Run containers ─────────────────────────────────────
+Log "Writing AWS credentials on EC2 for Docker awslogs driver"
+Remote @"
+sudo mkdir -p /root/.aws && \
+sudo tee /root/.aws/credentials > /dev/null <<'CREDS'
+[default]
+aws_access_key_id=$AWS_ACCESS_KEY_ID
+aws_secret_access_key=$AWS_SECRET_ACCESS_KEY
+CREDS
+sudo chmod 600 /root/.aws/credentials && \
+sudo tee /root/.aws/config > /dev/null <<'CFG'
+[default]
+region=$AWS_REGION
+CFG
+"@
+Ok "AWS credentials written for Docker daemon"
+
 Log "Pulling and running Docker containers on EC2"
 Remote @"
 sudo sh -c 'aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_BASE' && \
@@ -285,10 +305,29 @@ sudo docker pull $ECR_BASE/${ECR_API}:latest && \
 sudo docker pull $ECR_BASE/${ECR_BUILDER}:latest && \
 sudo docker stop servhub-api servhub-builder 2>/dev/null || true && \
 sudo docker rm   servhub-api servhub-builder 2>/dev/null || true && \
-sudo docker run -d --name servhub-api --restart always --env-file /etc/servhub.env -p 3001:3001 $ECR_BASE/${ECR_API}:latest && \
-sudo docker run -d --name servhub-builder --restart always --env-file /etc/servhub.env $ECR_BASE/${ECR_BUILDER}:latest
+sudo docker run -d \
+  --name servhub-api \
+  --restart always \
+  --env-file /etc/servhub.env \
+  -p 3001:3001 \
+  --log-driver awslogs \
+  --log-opt awslogs-region=$AWS_REGION \
+  --log-opt awslogs-group=/servhub/api \
+  --log-opt awslogs-stream=servhub-api \
+  --log-opt awslogs-create-group=true \
+  $ECR_BASE/${ECR_API}:latest && \
+sudo docker run -d \
+  --name servhub-builder \
+  --restart always \
+  --env-file /etc/servhub.env \
+  --log-driver awslogs \
+  --log-opt awslogs-region=$AWS_REGION \
+  --log-opt awslogs-group=/servhub/builder \
+  --log-opt awslogs-stream=servhub-builder \
+  --log-opt awslogs-create-group=true \
+  $ECR_BASE/${ECR_BUILDER}:latest
 "@
-Ok "Containers started"
+Ok "Containers started with CloudWatch logging"
 
 # ── 4f. Write Nginx config ────────────────────────────────────────────────────
 Log "Writing Nginx configuration"

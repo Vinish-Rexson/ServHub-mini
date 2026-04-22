@@ -1,0 +1,110 @@
+{
+  "widgets": [
+    {
+      "type": "text",
+      "x": 0, "y": 0, "width": 24, "height": 2,
+      "properties": {
+        "markdown": "# ServHub Production Overview\n**Region:** ap-south-1 (Mumbai) | **Account:** 421454275395 | **Dashboard updated:** 2026-04-22"
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0, "y": 2, "width": 8, "height": 6,
+      "properties": {
+        "title": "SQS - Build Queue Depth",
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "ap-south-1",
+        "period": 60,
+        "stat": "Average",
+        "metrics": [
+          ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "servhub-mini-builds", {"label": "Visible"}],
+          ["AWS/SQS", "ApproximateNumberOfMessagesNotVisible", "QueueName", "servhub-mini-builds", {"label": "In-Flight"}]
+        ]
+      }
+    },
+    {
+      "type": "metric",
+      "x": 8, "y": 2, "width": 8, "height": 6,
+      "properties": {
+        "title": "SQS - Dead Letter Queue",
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "ap-south-1",
+        "period": 60,
+        "stat": "Sum",
+        "metrics": [
+          ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "servhub-mini-builds-dlq", {"color": "#d62728", "label": "DLQ Messages"}]
+        ]
+      }
+    },
+    {
+      "type": "metric",
+      "x": 16, "y": 2, "width": 8, "height": 6,
+      "properties": {
+        "title": "SQS - Oldest Message Age (seconds)",
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "ap-south-1",
+        "period": 60,
+        "stat": "Maximum",
+        "metrics": [
+          ["AWS/SQS", "ApproximateAgeOfOldestMessage", "QueueName", "servhub-mini-builds", {"label": "Age (s)"}]
+        ]
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0, "y": 8, "width": 12, "height": 6,
+      "properties": {
+        "title": "API - HTTP 5xx Errors",
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "ap-south-1",
+        "period": 300,
+        "stat": "Sum",
+        "metrics": [
+          ["ServHub/API", "Http5xxCount", {"color": "#d62728", "label": "5xx Errors"}]
+        ]
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12, "y": 8, "width": 12, "height": 6,
+      "properties": {
+        "title": "API - HTTP 4xx Client Errors",
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "ap-south-1",
+        "period": 300,
+        "stat": "Sum",
+        "metrics": [
+          ["ServHub/API", "Http4xxCount", {"color": "#ff7f0e", "label": "4xx Errors"}]
+        ]
+      }
+    },
+    {
+      "type": "log",
+      "x": 0, "y": 14, "width": 24, "height": 6,
+      "properties": {
+        "title": "API - Recent Error Log Lines",
+        "region": "ap-south-1",
+        "view": "table",
+        "query": "SOURCE '/servhub/api' | fields @timestamp, @message | filter @message like /(?i)(error|fail|5[0-9][0-9])/ | sort @timestamp desc | limit 50"
+      }
+    },
+    {
+      "type": "alarm",
+      "x": 0, "y": 20, "width": 24, "height": 4,
+      "properties": {
+        "title": "Alarm Status",
+        "alarms": [
+          "arn:aws:cloudwatch:ap-south-1:421454275395:alarm:servhub-api-5xx-spike",
+          "arn:aws:cloudwatch:ap-south-1:421454275395:alarm:servhub-sqs-queue-depth",
+          "arn:aws:cloudwatch:ap-south-1:421454275395:alarm:servhub-mini-builds-dlq-visible",
+          "arn:aws:cloudwatch:ap-south-1:421454275395:alarm:servhub-sqs-message-age"
+        ]
+      }
+    }
+  ]
+}
