@@ -17,9 +17,9 @@ param(
 # ── CONFIGURATION ─────────────────────────────────────────────────────────────
 $AWS_REGION      = "ap-south-1"
 $AWS_ACCOUNT     = "421454275395"
-$DOMAIN          = "servhub.4istudios.in"   # your root domain
-$APP_DOMAIN      = "app.$DOMAIN"            # e.g. app.servhub.4istudios.in
-$API_DOMAIN      = "api.$DOMAIN"            # e.g. api.servhub.4istudios.in
+$APP_DOMAIN      = "servhub.4istudios.in"      # Dashboard
+$API_DOMAIN      = "api-servhub.4istudios.in"  # API
+$DOMAIN          = "4istudios.in"              # root domain
 
 $KEY_NAME        = "servhub-key"
 $KEY_PATH        = "$HOME\Downloads\$KEY_NAME.pem"
@@ -353,8 +353,8 @@ Write-Host ""
 Write-Host "━━━ MANUAL STEPS REMAINING ━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Magenta
 Write-Host ""
 Write-Host "  1. CLOUDFLARE DNS → Add these two A records:" -ForegroundColor White
-Write-Host "       app.$DOMAIN  →  $EC2_IP  (Proxied)" -ForegroundColor Gray
-Write-Host "       api.$DOMAIN  →  $EC2_IP  (Proxied)" -ForegroundColor Gray
+Write-Host "       servhub.$DOMAIN      →  $EC2_IP  (Proxied)" -ForegroundColor Gray
+Write-Host "       api-servhub.$DOMAIN  →  $EC2_IP  (Proxied)" -ForegroundColor Gray
 Write-Host "     SSL/TLS mode → set to 'Full'" -ForegroundColor Gray
 Write-Host ""
 Write-Host "  2. SUPABASE → Authentication → URL Configuration:" -ForegroundColor White
