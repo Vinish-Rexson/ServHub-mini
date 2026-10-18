@@ -1,6 +1,11 @@
 import { supabase } from "./supabase";
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:3001").replace(/\/$/, "");
+const API_BASE_URL = (
+  import.meta.env.VITE_API_BASE_URL ||
+  (typeof window !== "undefined" && window.location.hostname.includes("4istudios.in")
+    ? "https://api-servhub.4istudios.in"
+    : "http://127.0.0.1:3001")
+).replace(/\/$/, "");
 const SESSION_TIMEOUT_MS = 4000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
 
