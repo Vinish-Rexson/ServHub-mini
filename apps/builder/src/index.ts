@@ -477,12 +477,24 @@ async function processBuildMessage(message: Message): Promise<void> {
 		await runCommand(job.deploymentId, "git", ["clone", "--depth", "1", job.repoUrl, cloneDir]);
 		await runCommand(job.deploymentId, "git", ["-C", cloneDir, "checkout", job.commitSha]);
 
-		await runCommand(job.deploymentId, getNpmCommand(), ["ci"], { cwd: cloneDir });
+		const hasLockFile = await readFile(join(cloneDir, "package-lock.json")).then(() => true).catch(() => false);
+		const installArgs = hasLockFile ? ["ci", "--include=dev"] : ["install", "--include=dev"];
+
+		await runCommand(job.deploymentId, getNpmCommand(), installArgs, {
+			cwd: cloneDir,
+			env: {
+				...process.env,
+				...job.envVars,
+				NODE_ENV: "development",
+			},
+		});
+
 		await runCommand(job.deploymentId, getNpmCommand(), ["run", "build"], {
 			cwd: cloneDir,
 			env: {
 				...process.env,
 				...job.envVars,
+				NODE_ENV: "production",
 				CI: "false",
 			},
 			stdoutLevel: "INFO",

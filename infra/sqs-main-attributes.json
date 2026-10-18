@@ -1,1 +1,1 @@
-{"ReceiveMessageWaitTimeSeconds":"20","MessageRetentionPeriod":"86400","RedrivePolicy":"{\"maxReceiveCount\":\"3\",\"deadLetterTargetArn\":\"arn:aws:sqs:ap-south-1:421454275395:servhub-mini-builds-dlq\"}","VisibilityTimeout":"600"}
+{"MessageRetentionPeriod":"86400","VisibilityTimeout":"600","RedrivePolicy":"{\"deadLetterTargetArn\":\"arn:aws:sqs:ap-southeast-2:681842289425:servhub-mini-builds-dlq\",\"maxReceiveCount\":\"3\"}","ReceiveMessageWaitTimeSeconds":"20"}

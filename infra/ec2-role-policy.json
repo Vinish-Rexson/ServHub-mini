@@ -1,0 +1,53 @@
+{
+    "Version":  "2012-10-17",
+    "Statement":  [
+                      {
+                          "Effect":  "Allow",
+                          "Sid":  "SQSAccess",
+                          "Resource":  "arn:aws:sqs:ap-southeast-2:681842289425:*",
+                          "Action":  [
+                                         "sqs:SendMessage",
+                                         "sqs:ReceiveMessage",
+                                         "sqs:DeleteMessage",
+                                         "sqs:ChangeMessageVisibility",
+                                         "sqs:GetQueueAttributes"
+                                     ]
+                      },
+                      {
+                          "Effect":  "Allow",
+                          "Sid":  "S3Access",
+                          "Resource":  [
+                                           "arn:aws:s3:::servhub-mini-deployments-681842289425",
+                                           "arn:aws:s3:::servhub-mini-deployments-681842289425/*"
+                                       ],
+                          "Action":  [
+                                         "s3:PutObject",
+                                         "s3:GetObject",
+                                         "s3:DeleteObject",
+                                         "s3:ListBucket"
+                                     ]
+                      },
+                      {
+                          "Effect":  "Allow",
+                          "Sid":  "ECRAccess",
+                          "Resource":  "*",
+                          "Action":  [
+                                         "ecr:GetAuthorizationToken",
+                                         "ecr:BatchCheckLayerAvailability",
+                                         "ecr:GetDownloadUrlForLayer",
+                                         "ecr:BatchGetImage"
+                                     ]
+                      },
+                      {
+                          "Effect":  "Allow",
+                          "Sid":  "CloudWatchLogs",
+                          "Resource":  "*",
+                          "Action":  [
+                                         "logs:CreateLogGroup",
+                                         "logs:CreateLogStream",
+                                         "logs:PutLogEvents",
+                                         "logs:DescribeLogStreams"
+                                     ]
+                      }
+                  ]
+}

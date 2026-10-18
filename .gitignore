@@ -10,6 +10,8 @@ out/
 .env
 .env.*
 !.env.template
+!.env.deploy.template
+*.pem
 
 coverage/
 *.log
