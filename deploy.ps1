@@ -512,10 +512,8 @@ PORT=3001
 HOST=0.0.0.0
 NODE_ENV=production
 "@
-
 $envContent | ssh -i $KEY_PATH -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "ubuntu@$EC2_IP" "sudo tee /etc/servhub.env > /dev/null && sudo chmod 600 /etc/servhub.env"
 Ok "Environment file written securely"
-
 # ── 3b. Run Containers with CloudWatch Logging ─────────────────────────────────
 Log "Starting Docker containers with CloudWatch logging"
 Remote @"
