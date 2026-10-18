@@ -1,308 +1,509 @@
 ################################################################################
-# ServHub-Mini — Full Automated Deployment Script
-# Run from: C:\Projects\CCL\ServHub-mini
+# ServHub-Mini — Unified Automated Deployment Script with Elastic IP
+# Run from: C:\Projects\ServHub-mini
 #
 # FIRST RUN:  .\deploy.ps1
 # REDEPLOY:   .\deploy.ps1 -Resume   (skips infra, rebuilds images + dashboard only)
 #
-# MANUAL STEPS REMAINING AFTER THIS SCRIPT:
-#   1. Cloudflare: Add two A records (app + api) pointing to $EC2_IP
-#   2. Supabase: Update Site URL and Redirect URL to your domain
-#   3. GitHub OAuth App: Update Homepage URL and Callback URL
+# AUTOMATED BY THIS SCRIPT:
+#   - Auto-detects AWS Account ID from active CLI session
+#   - Creates EC2 IAM Role + Instance Profile (No static AWS keys needed!)
+#   - Creates S3 Bucket, SQS Queues (Main + DLQ), CloudWatch Log Groups
+#   - Creates ECR Repositories, builds & pushes Docker images
+#   - Launches EC2 instance & associates a permanent Elastic IP
+#   - Installs Docker & Nginx, deploys apps with CloudWatch logging
+#
+# ONLY MANUAL STEP REMAINING:
+#   Add/Update 2 A records in Cloudflare pointing to the printed Elastic IP!
 ################################################################################
 param(
     [switch]$Resume   # Skip infra creation, just rebuild and redeploy
 )
 
-# ── CONFIGURATION ─────────────────────────────────────────────────────────────
-$AWS_REGION      = "ap-south-1"
-$AWS_ACCOUNT     = "421454275395"
-$APP_DOMAIN      = "servhub.4istudios.in"      # Dashboard
-$API_DOMAIN      = "api-servhub.4istudios.in"  # API
-$DOMAIN          = "4istudios.in"              # root domain
+$ErrorActionPreference = "Stop"
+$env:AWS_PAGER = ""
 
+# ── LOGGING HELPERS ───────────────────────────────────────────────────────────
+function Log($msg)   { Write-Host "`n==> $msg" -ForegroundColor Cyan }
+function Ok($msg)    { Write-Host "    OK: $msg" -ForegroundColor Green }
+function Warn($msg)  { Write-Host "    WARN: $msg" -ForegroundColor Yellow }
+function Err($msg)   { Write-Host "`n[ERROR] $msg" -ForegroundColor Red; exit 1 }
+function Clean($val) { if ($null -eq $val) { return "" }; return ([string]$val).Trim() }
+function Write-JsonFile($path, $content) {
+    $parent = Split-Path $path
+    if ($parent -and -not (Test-Path $parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
+    [System.IO.File]::WriteAllText($path, $content, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+# ── 0. IDENTITY & ACCOUNT AUTO-DETECTION ───────────────────────────────────────
+Log "Checking active AWS CLI credentials..."
+try {
+    $callerIdentityJson = aws sts get-caller-identity --output json 2>$null
+    if (-not $callerIdentityJson) {
+        throw "Could not retrieve AWS caller identity."
+    }
+    $callerIdentity = $callerIdentityJson | ConvertFrom-Json
+    $AWS_ACCOUNT = $callerIdentity.Account.Trim()
+    Ok "Authenticated to AWS Account: $AWS_ACCOUNT (Arn: $($callerIdentity.Arn))"
+} catch {
+    Err "AWS CLI is not logged in or token is expired.`nPlease run 'aws configure' (or 'aws login') with credentials for your new AWS account first."
+}
+
+# ── CONFIGURATION & SECRETS (Loaded securely from .env.deploy) ───────────────
+$deployEnvPath = Join-Path $PSScriptRoot ".env.deploy"
+if (-not (Test-Path $deployEnvPath)) {
+    Err "Missing configuration file '.env.deploy'!`nTo keep your secrets safe in a public repository, copy '.env.deploy.template' to '.env.deploy' and enter your Supabase & GitHub keys.`n('.env.deploy' is git-ignored and will never be committed to GitHub)."
+}
+
+$cfg = @{}
+Get-Content $deployEnvPath | ForEach-Object {
+    $line = $_.Trim()
+    if ($line -and -not $line.StartsWith("#") -and $line.Contains("=")) {
+        $parts = $line.Split("=", 2)
+        $cfg[$parts[0].Trim()] = $parts[1].Trim()
+    }
+}
+
+$SUPABASE_URL         = $cfg["SUPABASE_URL"]
+$SUPABASE_SERVICE_KEY = $cfg["SUPABASE_SERVICE_ROLE_KEY"]
+$SUPABASE_ANON_KEY    = $cfg["SUPABASE_ANON_KEY"]
+$DATABASE_URL         = $cfg["DATABASE_URL"]
+$DIRECT_DATABASE_URL  = $cfg["DIRECT_DATABASE_URL"]
+
+$GITHUB_CLIENT_ID     = $cfg["GITHUB_CLIENT_ID"]
+$GITHUB_CLIENT_SECRET = $cfg["GITHUB_CLIENT_SECRET"]
+$GITHUB_WEBHOOK_SECRET= $cfg["GITHUB_WEBHOOK_SECRET"]
+
+$DOMAIN               = if ($cfg["DOMAIN"]) { $cfg["DOMAIN"] } else { "4istudios.in" }
+$APP_DOMAIN           = if ($cfg["APP_DOMAIN"]) { $cfg["APP_DOMAIN"] } else { "servhub.$DOMAIN" }
+$API_DOMAIN           = if ($cfg["API_DOMAIN"]) { $cfg["API_DOMAIN"] } else { "api-servhub.$DOMAIN" }
+
+foreach ($req in @("SUPABASE_URL", "SUPABASE_SERVICE_KEY", "SUPABASE_ANON_KEY", "DATABASE_URL", "DIRECT_DATABASE_URL", "GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET", "GITHUB_WEBHOOK_SECRET")) {
+    $val = (Get-Variable -Name $req -ValueOnly -ErrorAction SilentlyContinue)
+    if (-not $val -or $val -match "\[YOUR_") {
+        Err "Please provide a valid '$req' in '.env.deploy'."
+    }
+}
+
+$AWS_REGION      = "ap-southeast-2"
 $KEY_NAME        = "servhub-key"
 $KEY_PATH        = "$HOME\Downloads\$KEY_NAME.pem"
 $SG_NAME         = "servhub-sg"
 $INSTANCE_NAME   = "servhub-prod"
 $INSTANCE_TYPE   = "t3.small"
-$AMI_ID          = "ami-0f58b397bc5c1f2e8"   # Ubuntu 24.04 LTS ap-south-1
+$AMI_ID          = "ami-0c4c0d31978150116"     # Ubuntu 24.04 LTS ap-southeast-2
+
+$EIP_NAME        = "servhub-eip"
+$IAM_ROLE_NAME   = "servhub-ec2-role"
+$IAM_PROFILE_NAME= "servhub-ec2-profile"
 
 $ECR_API         = "servhub-api"
 $ECR_BUILDER     = "servhub-builder"
 $ECR_BASE        = "$AWS_ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com"
 
-$S3_BUCKET       = "servhub-deployments-prod"
+$S3_BUCKET       = "servhub-mini-deployments-$AWS_ACCOUNT"
+$SQS_QUEUE_NAME  = "servhub-mini-builds"
+$SQS_DLQ_NAME    = "servhub-mini-builds-dlq"
 
 $CW_LOG_API      = "/servhub/api"
 $CW_LOG_BUILDER  = "/servhub/builder"
 
-# ── HELPERS ───────────────────────────────────────────────────────────────────
-function Log($msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
-function Ok($msg)  { Write-Host "    OK: $msg" -ForegroundColor Green }
-function Err($msg) { Write-Host "    ERR: $msg" -ForegroundColor Red; exit 1 }
-
 ################################################################################
-# PHASE 1 — AWS INFRASTRUCTURE (skipped with -Resume)
+# PHASE 1 — AWS INFRASTRUCTURE (Provisioned once, skipped with -Resume)
 ################################################################################
 if (-not $Resume) {
 
-# ── 1a. Key Pair ──────────────────────────────────────────────────────────────
-Log "Creating EC2 key pair: $KEY_NAME"
-$existingKey = aws ec2 describe-key-pairs --key-names $KEY_NAME --region $AWS_REGION 2>$null
-if ($existingKey) {
-    Ok "Key pair already exists, skipping"
-} else {
-    aws ec2 create-key-pair `
-        --key-name $KEY_NAME `
-        --query "KeyMaterial" `
-        --output text `
-        --region $AWS_REGION | Out-File -FilePath $KEY_PATH -Encoding ascii -NoNewline
-    # Fix permissions so SSH accepts it
-    icacls $KEY_PATH /inheritance:r /grant:r "${env:USERNAME}:R" | Out-Null
-    Ok "Key saved to $KEY_PATH"
-}
+    # ── 1a. IAM Role & Instance Profile for EC2 ───────────────────────────────
+    Log "Configuring EC2 IAM Instance Profile (Zero static keys): $IAM_PROFILE_NAME"
+    $trustPath = Join-Path $PSScriptRoot "infra/ec2-trust-policy.json"
+    $trustDoc = '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
+    Write-JsonFile $trustPath $trustDoc
 
-# ── 1b. Security Group ────────────────────────────────────────────────────────
-Log "Creating security group: $SG_NAME"
-$existingSG = aws ec2 describe-security-groups `
-    --filters "Name=group-name,Values=$SG_NAME" `
-    --query "SecurityGroups[0].GroupId" `
-    --output text `
-    --region $AWS_REGION 2>$null
-
-if ($existingSG -and $existingSG -ne "None") {
-    $SG_ID = $existingSG
-    Ok "Security group already exists: $SG_ID"
-} else {
-    $SG_ID = aws ec2 create-security-group `
-        --group-name $SG_NAME `
-        --description "ServHub production security group" `
-        --query "GroupId" `
-        --output text `
-        --region $AWS_REGION
-    Ok "Created security group: $SG_ID"
-
-    # Get your current public IP for SSH access
-    $MY_IP = (Invoke-RestMethod -Uri "https://checkip.amazonaws.com").Trim()
-
-    # SSH — your IP only
-    aws ec2 authorize-security-group-ingress `
-        --group-id $SG_ID `
-        --protocol tcp --port 22 `
-        --cidr "$MY_IP/32" `
-        --region $AWS_REGION | Out-Null
-
-    # HTTP — open (Cloudflare needs this)
-    aws ec2 authorize-security-group-ingress `
-        --group-id $SG_ID `
-        --protocol tcp --port 80 `
-        --cidr "0.0.0.0/0" `
-        --region $AWS_REGION | Out-Null
-
-    # HTTPS — open (optional)
-    aws ec2 authorize-security-group-ingress `
-        --group-id $SG_ID `
-        --protocol tcp --port 443 `
-        --cidr "0.0.0.0/0" `
-        --region $AWS_REGION | Out-Null
-
-    Ok "Inbound rules configured (SSH from $MY_IP, HTTP/HTTPS from everywhere)"
-}
-
-# ── 1c. Launch EC2 Instance ───────────────────────────────────────────────────
-Log "Checking for existing EC2 instance: $INSTANCE_NAME"
-$INSTANCE_ID = aws ec2 describe-instances `
-    --filters "Name=tag:Name,Values=$INSTANCE_NAME" "Name=instance-state-name,Values=running,pending,stopped" `
-    --query "Reservations[0].Instances[0].InstanceId" `
-    --output text `
-    --region $AWS_REGION 2>$null
-
-if ($INSTANCE_ID -and $INSTANCE_ID -ne "None") {
-    Ok "Instance already exists: $INSTANCE_ID"
-} else {
-    Log "Launching EC2 instance ($INSTANCE_TYPE, Ubuntu 24.04)..."
-    $INSTANCE_ID = aws ec2 run-instances `
-        --image-id $AMI_ID `
-        --instance-type $INSTANCE_TYPE `
-        --key-name $KEY_NAME `
-        --security-group-ids $SG_ID `
-        --block-device-mappings "[{`"DeviceName`":`"/dev/sda1`",`"Ebs`":{`"VolumeSize`":20,`"VolumeType`":`"gp3`"}}]" `
-        --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$INSTANCE_NAME}]" `
-        --query "Instances[0].InstanceId" `
-        --output text `
-        --region $AWS_REGION
-    Ok "Launched: $INSTANCE_ID"
-}
-
-# ── 1d. Wait for instance + get public IP ─────────────────────────────────────
-Log "Waiting for instance to be in 'running' state..."
-aws ec2 wait instance-running --instance-ids $INSTANCE_ID --region $AWS_REGION
-$EC2_IP = aws ec2 describe-instances `
-    --instance-ids $INSTANCE_ID `
-    --query "Reservations[0].Instances[0].PublicIpAddress" `
-    --output text `
-    --region $AWS_REGION
-Ok "Instance running at: $EC2_IP"
-
-# ── 1e. ECR Repositories ──────────────────────────────────────────────────────
-Log "Creating ECR repositories"
-foreach ($repo in @($ECR_API, $ECR_BUILDER)) {
-    $exists = aws ecr describe-repositories --repository-names $repo --region $AWS_REGION 2>$null
-    if ($exists) {
-        Ok "$repo already exists"
+    $roleCheck = Clean (aws iam list-roles --query "Roles[?RoleName=='$IAM_ROLE_NAME'].RoleName" --output text)
+    if (-not $roleCheck -or $roleCheck -eq "None") {
+        aws iam create-role --role-name $IAM_ROLE_NAME --assume-role-policy-document "file://$trustPath" | Out-Null
+        Ok "Created IAM Role: $IAM_ROLE_NAME"
     } else {
-        aws ecr create-repository --repository-name $repo --region $AWS_REGION | Out-Null
-        Ok "Created: $repo"
+        Ok "IAM Role already exists: $IAM_ROLE_NAME"
     }
-}
+
+    $policyDoc = @{
+        Version = "2012-10-17"
+        Statement = @(
+            @{
+                Sid = "SQSAccess"
+                Effect = "Allow"
+                Action = @("sqs:SendMessage","sqs:ReceiveMessage","sqs:DeleteMessage","sqs:ChangeMessageVisibility","sqs:GetQueueAttributes")
+                Resource = "arn:aws:sqs:${AWS_REGION}:${AWS_ACCOUNT}:*"
+            },
+            @{
+                Sid = "S3Access"
+                Effect = "Allow"
+                Action = @("s3:PutObject","s3:GetObject","s3:DeleteObject","s3:ListBucket")
+                Resource = @("arn:aws:s3:::$S3_BUCKET","arn:aws:s3:::$S3_BUCKET/*")
+            },
+            @{
+                Sid = "ECRAccess"
+                Effect = "Allow"
+                Action = @("ecr:GetAuthorizationToken","ecr:BatchCheckLayerAvailability","ecr:GetDownloadUrlForLayer","ecr:BatchGetImage")
+                Resource = "*"
+            },
+            @{
+                Sid = "CloudWatchLogs"
+                Effect = "Allow"
+                Action = @("logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents","logs:DescribeLogStreams")
+                Resource = "*"
+            }
+        )
+    } | ConvertTo-Json -Depth 10
+
+    $policyPath = Join-Path $PSScriptRoot "infra/ec2-role-policy.json"
+    Write-JsonFile $policyPath $policyDoc
+    aws iam put-role-policy --role-name $IAM_ROLE_NAME --policy-name "servhub-ec2-policy" --policy-document "file://$policyPath" | Out-Null
+    Ok "IAM policy attached/updated on role"
+
+    $existingProfile = Clean (aws iam list-instance-profiles --query "InstanceProfiles[?InstanceProfileName=='$IAM_PROFILE_NAME'].InstanceProfileName" --output text)
+    if (-not $existingProfile -or $existingProfile -eq "None") {
+        aws iam create-instance-profile --instance-profile-name $IAM_PROFILE_NAME | Out-Null
+        aws iam add-role-to-instance-profile --instance-profile-name $IAM_PROFILE_NAME --role-name $IAM_ROLE_NAME | Out-Null
+        Ok "Created and attached IAM profile: $IAM_PROFILE_NAME"
+        Start-Sleep -Seconds 5
+    } else {
+        try {
+            aws iam add-role-to-instance-profile --instance-profile-name $IAM_PROFILE_NAME --role-name $IAM_ROLE_NAME 2>$null | Out-Null
+        } catch {}
+        Ok "IAM Profile already exists: $IAM_PROFILE_NAME"
+    }
+
+    # ── 1b. S3 Bucket ─────────────────────────────────────────────────────────
+    Log "Checking S3 Bucket: $S3_BUCKET"
+    $foundBucket = Clean (aws s3api list-buckets --query "Buckets[?Name=='$S3_BUCKET'].Name" --output text)
+    if (-not $foundBucket -or $foundBucket -eq "None") {
+        if ($AWS_REGION -eq "us-east-1") {
+            aws s3api create-bucket --bucket $S3_BUCKET --region $AWS_REGION | Out-Null
+        } else {
+            aws s3api create-bucket --bucket $S3_BUCKET --region $AWS_REGION --create-bucket-configuration LocationConstraint=$AWS_REGION | Out-Null
+        }
+        aws s3api put-bucket-versioning --bucket $S3_BUCKET --versioning-configuration Status=Enabled --region $AWS_REGION | Out-Null
+        aws s3api put-public-access-block --bucket $S3_BUCKET --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true --region $AWS_REGION | Out-Null
+        Ok "Created S3 Bucket: $S3_BUCKET"
+    } else {
+        Ok "S3 Bucket already exists: $S3_BUCKET"
+    }
+
+    # ── 1c. SQS Queues (Main + DLQ) ───────────────────────────────────────────
+    Log "Checking SQS DLQ: $SQS_DLQ_NAME"
+    $dlqUrl = Clean (aws sqs list-queues --queue-name-prefix $SQS_DLQ_NAME --region $AWS_REGION --query "QueueUrls[?ends_with(@, '/$SQS_DLQ_NAME')]" --output text)
+    if (-not $dlqUrl -or $dlqUrl -eq "None") {
+        $dlqUrl = Clean (aws sqs create-queue --queue-name $SQS_DLQ_NAME --region $AWS_REGION --query "QueueUrl" --output text)
+        Ok "Created DLQ: $dlqUrl"
+    } else {
+        Ok "DLQ already exists: $dlqUrl"
+    }
+    $dlqArn = Clean (aws sqs get-queue-attributes --queue-url $dlqUrl --attribute-names QueueArn --region $AWS_REGION --query "Attributes.QueueArn" --output text)
+
+    Log "Checking SQS Main Queue: $SQS_QUEUE_NAME"
+    $mainQueueUrl = Clean (aws sqs list-queues --queue-name-prefix $SQS_QUEUE_NAME --region $AWS_REGION --query "QueueUrls[?ends_with(@, '/$SQS_QUEUE_NAME')]" --output text)
+    $redrivePolicy = (@{ deadLetterTargetArn = $dlqArn; maxReceiveCount = '3' } | ConvertTo-Json -Compress)
+    $queueAttrs = @{
+        VisibilityTimeout = "600"
+        ReceiveMessageWaitTimeSeconds = "20"
+        MessageRetentionPeriod = "86400"
+        RedrivePolicy = $redrivePolicy
+    }
+    $sqsAttrPath = Join-Path $PSScriptRoot "infra/sqs-main-attributes.json"
+    Write-JsonFile $sqsAttrPath ($queueAttrs | ConvertTo-Json -Compress)
+
+    if (-not $mainQueueUrl -or $mainQueueUrl -eq "None") {
+        $mainQueueUrl = Clean (aws sqs create-queue --queue-name $SQS_QUEUE_NAME --attributes "file://$sqsAttrPath" --region $AWS_REGION --query "QueueUrl" --output text)
+        Ok "Created Main Queue: $mainQueueUrl"
+    } else {
+        aws sqs set-queue-attributes --queue-url $mainQueueUrl --attributes "file://$sqsAttrPath" --region $AWS_REGION | Out-Null
+        Ok "Main Queue updated: $mainQueueUrl"
+    }
+
+    # ── 1d. CloudWatch Log Groups ─────────────────────────────────────────────
+    Log "Checking CloudWatch Log Groups"
+    foreach ($lg in @($CW_LOG_API, $CW_LOG_BUILDER)) {
+        $lgExists = aws logs describe-log-groups --log-group-name-prefix $lg --region $AWS_REGION --query "logGroups[?logGroupName=='$lg'].logGroupName" --output text 2>$null
+        if (-not $lgExists -or $lgExists -eq "None") {
+            aws logs create-log-group --log-group-name $lg --region $AWS_REGION 2>$null | Out-Null
+            aws logs put-retention-policy --log-group-name $lg --retention-in-days 14 --region $AWS_REGION 2>$null | Out-Null
+            Ok "Created log group: $lg (14d retention)"
+        } else {
+            Ok "Log group already exists: $lg"
+        }
+    }
+
+    # ── 1e. Key Pair ──────────────────────────────────────────────────────────
+    Log "Checking EC2 key pair: $KEY_NAME"
+    $existingKey = Clean (aws ec2 describe-key-pairs --query "KeyPairs[?KeyName=='$KEY_NAME'].KeyName" --region $AWS_REGION --output text)
+    if ($existingKey -and $existingKey -ne "None" -and (Test-Path $KEY_PATH)) {
+        Ok "Key pair already exists at: $KEY_PATH"
+    } else {
+        if (Test-Path $KEY_PATH) {
+            icacls $KEY_PATH /grant:r "${env:USERNAME}:F" 2>$null | Out-Null
+            Remove-Item -Force $KEY_PATH -ErrorAction SilentlyContinue
+        }
+        aws ec2 delete-key-pair --key-name $KEY_NAME --region $AWS_REGION 2>$null | Out-Null
+        $keyMat = Clean (aws ec2 create-key-pair `
+            --key-name $KEY_NAME `
+            --query "KeyMaterial" `
+            --output text `
+            --region $AWS_REGION)
+        $keyMat = ($keyMat -split "\r?\n") -join "`n"
+        [System.IO.File]::WriteAllText($KEY_PATH, $keyMat + "`n", [System.Text.Encoding]::ASCII)
+        icacls $KEY_PATH /inheritance:r /grant:r "${env:USERNAME}:R" | Out-Null
+        Ok "Created and saved key to $KEY_PATH"
+    }
+
+    # ── 1f. Security Group ────────────────────────────────────────────────────
+    Log "Checking security group: $SG_NAME"
+    $existingSG = aws ec2 describe-security-groups `
+        --filters "Name=group-name,Values=$SG_NAME" `
+        --query "SecurityGroups[0].GroupId" `
+        --output text `
+        --region $AWS_REGION 2>$null
+
+    if ($existingSG -and $existingSG -ne "None") {
+        $SG_ID = Clean $existingSG
+        Ok "Security group already exists: $SG_ID"
+    } else {
+        $SG_ID = Clean (aws ec2 create-security-group `
+            --group-name $SG_NAME `
+            --description "ServHub production security group" `
+            --query "GroupId" `
+            --output text `
+            --region $AWS_REGION)
+        Ok "Created security group: $SG_ID"
+
+        # Allow SSH (Port 22), HTTP (Port 80), HTTPS (Port 443)
+        aws ec2 authorize-security-group-ingress --group-id $SG_ID --protocol tcp --port 22 --cidr "0.0.0.0/0" --region $AWS_REGION | Out-Null
+        aws ec2 authorize-security-group-ingress --group-id $SG_ID --protocol tcp --port 80 --cidr "0.0.0.0/0" --region $AWS_REGION | Out-Null
+        aws ec2 authorize-security-group-ingress --group-id $SG_ID --protocol tcp --port 443 --cidr "0.0.0.0/0" --region $AWS_REGION | Out-Null
+        Ok "Inbound rules configured (SSH, HTTP, HTTPS)"
+    }
+
+    # ── 1g. Launch EC2 Instance ───────────────────────────────────────────────
+    Log "Checking for existing EC2 instance: $INSTANCE_NAME"
+    $INSTANCE_ID = aws ec2 describe-instances `
+        --filters "Name=tag:Name,Values=$INSTANCE_NAME" "Name=instance-state-name,Values=running,pending,stopped" `
+        --query "Reservations[0].Instances[0].InstanceId" `
+        --output text `
+        --region $AWS_REGION 2>$null
+
+    if ($INSTANCE_ID -and $INSTANCE_ID -ne "None") {
+        $INSTANCE_ID = Clean $INSTANCE_ID
+        $instState = Clean (aws ec2 describe-instances --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0].State.Name" --output text --region $AWS_REGION 2>$null)
+        if ($instState -eq "stopped") {
+            Log "Instance is stopped. Starting instance: $INSTANCE_ID..."
+            aws ec2 start-instances --instance-ids $INSTANCE_ID --region $AWS_REGION | Out-Null
+        }
+        Ok "Instance already exists: $INSTANCE_ID (State: $instState)"
+    } else {
+        Log "Launching EC2 instance ($INSTANCE_TYPE, Ubuntu 24.04)..."
+        $blockMappingPath = Join-Path $PSScriptRoot "infra/ec2-block-mappings.json"
+        Write-JsonFile $blockMappingPath '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":20,"VolumeType":"gp3"}}]'
+
+        $INSTANCE_ID = Clean (aws ec2 run-instances `
+            --image-id $AMI_ID `
+            --instance-type $INSTANCE_TYPE `
+            --key-name $KEY_NAME `
+            --security-group-ids $SG_ID `
+            --iam-instance-profile "Name=$IAM_PROFILE_NAME" `
+            --metadata-options "HttpEndpoint=enabled,HttpPutResponseHopLimit=2,HttpTokens=optional" `
+            --block-device-mappings "file://$blockMappingPath" `
+            --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$INSTANCE_NAME}]" `
+            --query "Instances[0].InstanceId" `
+            --output text `
+            --region $AWS_REGION)
+
+        if (-not $INSTANCE_ID -or $INSTANCE_ID -eq "None") {
+            Err "Failed to launch EC2 instance. Check AWS CLI output."
+        }
+        Ok "Launched instance: $INSTANCE_ID"
+    }
+
+    Log "Waiting for instance to be in 'running' state..."
+    aws ec2 wait instance-running --instance-ids $INSTANCE_ID --region $AWS_REGION
+
+    # Ensure IAM role and IMDS hop limit are attached
+    aws ec2 modify-instance-metadata-options --instance-id $INSTANCE_ID --http-put-response-hop-limit 2 --http-endpoint enabled --region $AWS_REGION 2>$null | Out-Null
+
+    $profileAssoc = aws ec2 describe-iam-instance-profile-associations `
+        --filters "Name=instance-id,Values=$INSTANCE_ID" "Name=state,Values=associated,associating" `
+        --query "IamInstanceProfileAssociations[0].AssociationId" `
+        --region $AWS_REGION --output text 2>$null
+    if (-not $profileAssoc -or $profileAssoc -eq "None") {
+        try {
+            aws ec2 associate-iam-instance-profile `
+                --instance-id $INSTANCE_ID `
+                --iam-instance-profile "Name=$IAM_PROFILE_NAME" `
+                --region $AWS_REGION 2>$null | Out-Null
+        } catch {}
+    }
+
+    # ── 1h. Elastic IP (Permanent Public IP) ──────────────────────────────────
+    Log "Checking Elastic IP: $EIP_NAME"
+    $existingEip = aws ec2 describe-addresses `
+        --filters "Name=tag:Name,Values=$EIP_NAME" `
+        --query "Addresses[0]" `
+        --region $AWS_REGION --output json 2>$null | ConvertFrom-Json
+
+    if ($existingEip -and $existingEip.AllocationId) {
+        $ALLOCATION_ID = $existingEip.AllocationId
+        $EC2_IP        = $existingEip.PublicIp
+        Ok "Reusing existing Elastic IP: $EC2_IP ($ALLOCATION_ID)"
+    } else {
+        Log "Allocating new Elastic IP..."
+        $eipRes = aws ec2 allocate-address `
+            --domain vpc `
+            --tag-specifications "ResourceType=elastic-ip,Tags=[{Key=Name,Value=$EIP_NAME}]" `
+            --region $AWS_REGION --output json | ConvertFrom-Json
+        $ALLOCATION_ID = $eipRes.AllocationId
+        $EC2_IP        = $eipRes.PublicIp
+        Ok "Allocated Elastic IP: $EC2_IP ($ALLOCATION_ID)"
+    }
+
+    Log "Associating Elastic IP ($EC2_IP) with instance $INSTANCE_ID..."
+    aws ec2 associate-address `
+        --instance-id $INSTANCE_ID `
+        --allocation-id $ALLOCATION_ID `
+        --allow-reassociation `
+        --region $AWS_REGION | Out-Null
+    Ok "Permanent Elastic IP active: $EC2_IP"
+
+    # ── 1i. ECR Repositories ──────────────────────────────────────────────────
+    Log "Checking ECR repositories"
+    foreach ($repo in @($ECR_API, $ECR_BUILDER)) {
+        $exists = Clean (aws ecr describe-repositories --query "repositories[?repositoryName=='$repo'].repositoryName" --region $AWS_REGION --output text 2>$null)
+        if ($exists -and $exists -ne "None") {
+            Ok "$repo already exists"
+        } else {
+            aws ecr create-repository --repository-name $repo --region $AWS_REGION | Out-Null
+            Ok "Created: $repo"
+        }
+    }
 
 } else {
-    # Resume mode — look up existing instance IP
-    Log "Resume mode: looking up existing EC2 instance"
-    $EC2_IP = aws ec2 describe-instances `
-        --filters "Name=tag:Name,Values=$INSTANCE_NAME" "Name=instance-state-name,Values=running" `
-        --query "Reservations[0].Instances[0].PublicIpAddress" `
-        --output text `
-        --region $AWS_REGION
-    if (-not $EC2_IP -or $EC2_IP -eq "None") { Err "Could not find running instance '$INSTANCE_NAME'" }
-    Ok "Found instance at: $EC2_IP"
+    # Resume mode — look up existing Elastic IP & SQS Queue URL
+    Log "Resume mode: looking up Elastic IP and SQS Queue"
+    $existingEip = aws ec2 describe-addresses `
+        --filters "Name=tag:Name,Values=$EIP_NAME" `
+        --query "Addresses[0].PublicIp" `
+        --region $AWS_REGION --output text 2>$null
+    if (-not $existingEip -or $existingEip -eq "None") { Err "Could not find Elastic IP tagged '$EIP_NAME'" }
+    $EC2_IP = Clean $existingEip
+    Ok "Found Elastic IP: $EC2_IP"
+
+    $mainQueueUrl = Clean (aws sqs get-queue-url --queue-name $SQS_QUEUE_NAME --region $AWS_REGION --query "QueueUrl" --output text)
 }
 
 ################################################################################
-# PHASE 2 — BUILD AND PUSH DOCKER IMAGES
+# PHASE 2 — SERVER PROVISIONING VIA SSH
 ################################################################################
 
-# ECR Login
-Log "Logging in to ECR"
-aws ecr get-login-password --region $AWS_REGION | `
-    docker login --username AWS --password-stdin $ECR_BASE
-Ok "ECR login successful"
-
-# ── 2a. Build and push API ────────────────────────────────────────────────────
-Log "Building API Docker image"
-Push-Location apps\api
-docker build -t "${ECR_API}:latest" .
-if ($LASTEXITCODE -ne 0) { Err "Docker build failed for API" }
-docker tag "${ECR_API}:latest" "$ECR_BASE/${ECR_API}:latest"
-docker push "$ECR_BASE/${ECR_API}:latest"
-if ($LASTEXITCODE -ne 0) { Err "Docker push failed for API" }
-Ok "API image pushed"
-Pop-Location
-
-# ── 2b. Build and push Builder ────────────────────────────────────────────────
-Log "Building Builder Docker image"
-Push-Location apps\builder
-docker build -t "${ECR_BUILDER}:latest" .
-if ($LASTEXITCODE -ne 0) { Err "Docker build failed for Builder" }
-docker tag "${ECR_BUILDER}:latest" "$ECR_BASE/${ECR_BUILDER}:latest"
-docker push "$ECR_BASE/${ECR_BUILDER}:latest"
-if ($LASTEXITCODE -ne 0) { Err "Docker push failed for Builder" }
-Ok "Builder image pushed"
-Pop-Location
-
-################################################################################
-# PHASE 3 — BUILD DASHBOARD STATIC FILES
-################################################################################
-
-Log "Building dashboard (production)"
-Push-Location apps\dashboard
-$env:VITE_API_BASE_URL       = "https://$API_DOMAIN"
-$env:VITE_SUPABASE_URL       = "https://xkldqliccvgrfnckrlyw.supabase.co"
-$env:VITE_SUPABASE_ANON_KEY  = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhrbGRxbGljY3ZncmZuY2tybHl3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3Njk1MDksImV4cCI6MjA5MjM0NTUwOX0.M5GpFE1EFTA2abxv040bLx8HTJ338mg2URH3nWtF77o"
-npm run build
-if ($LASTEXITCODE -ne 0) { Err "Dashboard build failed" }
-Ok "Dashboard built → dist/"
-Pop-Location
-
-################################################################################
-# PHASE 4 — SERVER SETUP VIA SSH
-################################################################################
-
-# Helper: run a command on the remote server
 function Remote($cmd) {
-    ssh -i $KEY_PATH -o StrictHostKeyChecking=no -o ConnectTimeout=10 "ubuntu@$EC2_IP" $cmd
+    ssh -i $KEY_PATH -o StrictHostKeyChecking=no -o ConnectTimeout=15 "ubuntu@$EC2_IP" $cmd
+    if ($LASTEXITCODE -ne 0) { Err "Remote command execution failed on EC2 (exit code: $LASTEXITCODE)." }
 }
 
-# Helper: SCP files to remote
 function Upload($local, $remote) {
     scp -i $KEY_PATH -o StrictHostKeyChecking=no -r $local "ubuntu@${EC2_IP}:${remote}"
 }
 
-Log "Waiting 30s for SSH to become available on new instance..."
-Start-Sleep -Seconds 30
+Log "Verifying SSH connection to $EC2_IP..."
+$sshSuccess = $false
+for ($i = 1; $i -le 20; $i++) {
+    try {
+        $sshTest = ssh -i $KEY_PATH -o StrictHostKeyChecking=no -o ConnectTimeout=5 "ubuntu@$EC2_IP" "echo ready" 2>$null
+        if ($sshTest -match "ready") {
+            $sshSuccess = $true
+            break
+        }
+    } catch {}
+    Write-Host "    Waiting for SSH ($i/20)..." -ForegroundColor DarkGray
+    Start-Sleep -Seconds 10
+}
+if (-not $sshSuccess) { Err "SSH connection to ubuntu@$EC2_IP timed out. Check security group rules." }
+Ok "SSH connected successfully"
 
-# ── 4a. Install Docker + Nginx ────────────────────────────────────────────────
-Log "Installing Docker and Nginx on EC2"
+# ── 2a. Install Docker, Nginx, AWS CLI on EC2 ─────────────────────────────────
+Log "Ensuring Docker, Nginx, and AWS CLI are installed on EC2"
 Remote @"
 sudo apt-get update -q && \
-sudo apt-get install -y -q nginx && \
-curl -fsSL https://get.docker.com | sudo sh && \
-sudo usermod -aG docker ubuntu && \
-sudo systemctl enable nginx && \
-sudo systemctl enable docker
+sudo apt-get install -y -q nginx unzip curl && \
+if ! command -v aws &> /dev/null; then
+    curl -fsSL 'https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip' -o '/tmp/awscliv2.zip' && \
+    unzip -q /tmp/awscliv2.zip -d /tmp && \
+    sudo /tmp/aws/install && \
+    rm -rf /tmp/aws /tmp/awscliv2.zip
+fi && \
+if ! command -v docker &> /dev/null; then
+    curl -fsSL https://get.docker.com | sudo sh
+    sudo usermod -aG docker ubuntu
+fi && \
+sudo systemctl enable --now nginx && \
+sudo systemctl enable --now docker
 "@
-Ok "Docker and Nginx installed"
+Ok "Packages installed and active"
 
-# ── 4b. Install AWS CLI + ECR Login on server ─────────────────────────────────
-Log "Installing AWS CLI on EC2"
+################################################################################
+# PHASE 3 — BUILD & RUN CONTAINER SERVICES DIRECTLY ON EC2
+################################################################################
+
+Log "Packaging API and Builder source code for EC2 build"
+$apiTar = Join-Path $env:TEMP "servhub-api.tar.gz"
+$builderTar = Join-Path $env:TEMP "servhub-builder.tar.gz"
+tar --exclude="node_modules" --exclude="dist" -czf $apiTar -C (Join-Path $PSScriptRoot "apps\api") .
+tar --exclude="node_modules" --exclude="dist" -czf $builderTar -C (Join-Path $PSScriptRoot "apps\builder") .
+
+Log "Uploading application sources to EC2..."
+scp -i $KEY_PATH -o StrictHostKeyChecking=no $apiTar "ubuntu@${EC2_IP}:/tmp/api.tar.gz"
+scp -i $KEY_PATH -o StrictHostKeyChecking=no $builderTar "ubuntu@${EC2_IP}:/tmp/builder.tar.gz"
+Remove-Item -Force $apiTar, $builderTar -ErrorAction SilentlyContinue
+
+Log "Building Docker containers on EC2 and pushing to ECR..."
 Remote @"
-sudo apt-get install -y -q awscli
+sudo rm -rf /tmp/build-api /tmp/build-builder && \
+mkdir -p /tmp/build-api /tmp/build-builder && \
+tar -xzf /tmp/api.tar.gz -C /tmp/build-api && \
+tar -xzf /tmp/builder.tar.gz -C /tmp/build-builder && \
+sudo docker build -t ${ECR_API}:latest -t $ECR_BASE/${ECR_API}:latest /tmp/build-api && \
+sudo docker build -t ${ECR_BUILDER}:latest -t $ECR_BASE/${ECR_BUILDER}:latest /tmp/build-builder && \
+sudo sh -c 'aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_BASE' && \
+sudo docker push $ECR_BASE/${ECR_API}:latest && \
+sudo docker push $ECR_BASE/${ECR_BUILDER}:latest && \
+sudo rm -rf /tmp/build-api /tmp/build-builder /tmp/api.tar.gz /tmp/builder.tar.gz
 "@
+Ok "Docker containers built and pushed to ECR successfully"
 
-# ── 4c. Upload dashboard static files ─────────────────────────────────────────
-Log "Uploading dashboard static files"
-Remote "sudo mkdir -p /var/www/dashboard && sudo chmod 777 /var/www/dashboard"
-Upload "apps\dashboard\dist\*" "/var/www/dashboard/"
-Remote "sudo chown -R www-data:www-data /var/www/dashboard"
-Ok "Dashboard files uploaded"
-
-# ── 4d. Write the API env file on the server ──────────────────────────────────
-Log "Writing API environment file on EC2"
+# ── 3a. Write Runtime Environment File (NO STATIC AWS KEYS NEEDED!) ───────────
+Log "Writing runtime environment file on EC2 (/etc/servhub.env)"
 $envContent = @"
-DATABASE_URL=postgresql://postgres.xkldqliccvgrfnckrlyw:Vinish%405152@aws-1-ap-south-1.pooler.supabase.com:6543/postgres?pgbouncer=true
-DIRECT_DATABASE_URL=postgresql://postgres:Vinish%405152@db.xkldqliccvgrfnckrlyw.supabase.co:5432/postgres?sslmode=require
-SUPABASE_URL=https://xkldqliccvgrfnckrlyw.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhrbGRxbGljY3ZncmZuY2tybHl3Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Njc2OTUwOSwiZXhwIjoyMDkyMzQ1NTA5fQ.a-J7xSLL8K6670qZqZJWeSbRPZ-j1LFjl-1oWtoLQo0
-AWS_REGION=ap-south-1
-AWS_ACCESS_KEY_ID=AKIAWEIFB4NBUESIZAUV
-AWS_SECRET_ACCESS_KEY=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
-SQS_QUEUE_URL=https://sqs.ap-south-1.amazonaws.com/421454275395/servhub-mini-builds
+DATABASE_URL=$DATABASE_URL
+DIRECT_DATABASE_URL=$DIRECT_DATABASE_URL
+SUPABASE_URL=$SUPABASE_URL
+SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_KEY
+AWS_REGION=$AWS_REGION
+SQS_QUEUE_URL=$mainQueueUrl
 S3_BUCKET_NAME=$S3_BUCKET
-GITHUB_CLIENT_ID=Ov23liPayart2aVDYT6q
-GITHUB_CLIENT_SECRET=9caaa64026e26f388d020399b7514827775e6642
-GITHUB_WEBHOOK_SECRET=da64958975200d0867a7c16782d0cfe2696fb7e394743fef66f095a1951329bd
+GITHUB_CLIENT_ID=$GITHUB_CLIENT_ID
+GITHUB_CLIENT_SECRET=$GITHUB_CLIENT_SECRET
+GITHUB_WEBHOOK_SECRET=$GITHUB_WEBHOOK_SECRET
 API_BASE_URL=https://$API_DOMAIN
 PLATFORM_DOMAIN=$DOMAIN
 PORT=3001
 HOST=0.0.0.0
+NODE_ENV=production
 "@
-# Write env file securely via heredoc over SSH
+
 $envContent | ssh -i $KEY_PATH -o StrictHostKeyChecking=no "ubuntu@$EC2_IP" "sudo tee /etc/servhub.env > /dev/null && sudo chmod 600 /etc/servhub.env"
-Ok "Environment file written"
+Ok "Environment file written securely"
 
-# ── 4e. ECR Login + Pull + Run containers ─────────────────────────────────────
-Log "Writing AWS credentials on EC2 for Docker awslogs driver"
+# ── 3b. Run Containers with CloudWatch Logging ─────────────────────────────────
+Log "Starting Docker containers with CloudWatch logging"
 Remote @"
-sudo mkdir -p /root/.aws && \
-sudo tee /root/.aws/credentials > /dev/null <<'CREDS'
-[default]
-aws_access_key_id=$AWS_ACCESS_KEY_ID
-aws_secret_access_key=$AWS_SECRET_ACCESS_KEY
-CREDS
-sudo chmod 600 /root/.aws/credentials && \
-sudo tee /root/.aws/config > /dev/null <<'CFG'
-[default]
-region=$AWS_REGION
-CFG
-"@
-Ok "AWS credentials written for Docker daemon"
-
-Log "Pulling and running Docker containers on EC2"
-Remote @"
-sudo sh -c 'aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_BASE' && \
-sudo docker pull $ECR_BASE/${ECR_API}:latest && \
-sudo docker pull $ECR_BASE/${ECR_BUILDER}:latest && \
 sudo docker stop servhub-api servhub-builder 2>/dev/null || true && \
 sudo docker rm   servhub-api servhub-builder 2>/dev/null || true && \
 sudo docker run -d \
@@ -312,7 +513,7 @@ sudo docker run -d \
   -p 3001:3001 \
   --log-driver awslogs \
   --log-opt awslogs-region=$AWS_REGION \
-  --log-opt awslogs-group=/servhub/api \
+  --log-opt awslogs-group=$CW_LOG_API \
   --log-opt awslogs-stream=servhub-api \
   --log-opt awslogs-create-group=true \
   $ECR_BASE/${ECR_API}:latest && \
@@ -322,19 +523,63 @@ sudo docker run -d \
   --env-file /etc/servhub.env \
   --log-driver awslogs \
   --log-opt awslogs-region=$AWS_REGION \
-  --log-opt awslogs-group=/servhub/builder \
+  --log-opt awslogs-group=$CW_LOG_BUILDER \
   --log-opt awslogs-stream=servhub-builder \
   --log-opt awslogs-create-group=true \
   $ECR_BASE/${ECR_BUILDER}:latest
 "@
-Ok "Containers started with CloudWatch logging"
+Ok "Containers running with automatic CloudWatch logging via EC2 IAM role"
 
-# ── 4f. Write Nginx config ────────────────────────────────────────────────────
-Log "Writing Nginx configuration"
+################################################################################
+# PHASE 4 — BUILD & DEPLOY DASHBOARD FRONTEND
+################################################################################
+
+Log "Building dashboard frontend"
+Push-Location apps\dashboard
+if (-not (Test-Path "node_modules")) {
+    Log "Installing dashboard npm dependencies..."
+    npm install
+    if ($LASTEXITCODE -ne 0) { Err "npm install failed for dashboard" }
+}
+$env:VITE_API_BASE_URL      = "https://$API_DOMAIN"
+$env:VITE_SUPABASE_URL      = $SUPABASE_URL
+$env:VITE_SUPABASE_ANON_KEY = $SUPABASE_ANON_KEY
+npm run build
+if ($LASTEXITCODE -ne 0) { Err "Dashboard build failed" }
+Ok "Dashboard built -> dist/"
+Pop-Location
+
+Log "Uploading Dashboard static files"
+Remote "sudo mkdir -p /var/www/dashboard && sudo chmod 777 /var/www/dashboard"
+$tarPath = Join-Path $PSScriptRoot "apps\dashboard\dist.tar.gz"
+tar -czf $tarPath -C (Join-Path $PSScriptRoot "apps\dashboard\dist") .
+scp -i $KEY_PATH -o StrictHostKeyChecking=no $tarPath "ubuntu@${EC2_IP}:/tmp/dist.tar.gz"
+Remove-Item -Force $tarPath -ErrorAction SilentlyContinue
+Remote "sudo tar -xzf /tmp/dist.tar.gz -C /var/www/dashboard && sudo rm -f /tmp/dist.tar.gz && sudo chown -R www-data:www-data /var/www/dashboard"
+Ok "Dashboard files uploaded"
+
+# ── 4e. Nginx Reverse Proxy Configuration with SSL ─────────────────────────────
+Log "Configuring Nginx reverse proxy with SSL"
+Remote @"
+sudo mkdir -p /etc/nginx/ssl && \
+if [ ! -f /etc/nginx/ssl/servhub.crt ]; then
+    sudo openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+      -keyout /etc/nginx/ssl/servhub.key \
+      -out /etc/nginx/ssl/servhub.crt \
+      -subj '/C=US/ST=State/L=City/O=ServHub/CN=*.$DOMAIN' && \
+    sudo chmod 600 /etc/nginx/ssl/servhub.key
+fi
+"@
+
 $nginxConf = @"
 server {
     listen 80;
+    listen 443 ssl;
     server_name $APP_DOMAIN;
+
+    ssl_certificate /etc/nginx/ssl/servhub.crt;
+    ssl_certificate_key /etc/nginx/ssl/servhub.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
 
     root /var/www/dashboard;
     index index.html;
@@ -351,7 +596,12 @@ server {
 
 server {
     listen 80;
+    listen 443 ssl;
     server_name $API_DOMAIN;
+
+    ssl_certificate /etc/nginx/ssl/servhub.crt;
+    ssl_certificate_key /etc/nginx/ssl/servhub.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
 
     location / {
         proxy_pass http://localhost:3001;
@@ -374,38 +624,37 @@ sudo rm -f /etc/nginx/sites-enabled/default && \
 sudo nginx -t && \
 sudo systemctl reload nginx
 "@
-Ok "Nginx configured and reloaded"
+Ok "Nginx successfully configured with SSL and reloaded"
 
 ################################################################################
-# DONE
+# COMPLETE SUMMARY
 ################################################################################
 
 Write-Host ""
-Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Green
-Write-Host "  DEPLOYMENT COMPLETE" -ForegroundColor Green
-Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Green
+Write-Host "==================================================================" -ForegroundColor Green
+Write-Host "               SERVED & DEPLOYED SUCCESSFULLY!                    " -ForegroundColor Green
+Write-Host "==================================================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "  EC2 Public IP : $EC2_IP" -ForegroundColor Yellow
-Write-Host "  App URL       : https://$APP_DOMAIN" -ForegroundColor Yellow
-Write-Host "  API URL       : https://$API_DOMAIN" -ForegroundColor Yellow
+Write-Host "  PERMANENT ELASTIC IP : " -NoNewline -ForegroundColor White
+Write-Host "$EC2_IP" -ForegroundColor Yellow
+Write-Host "  AWS Account ID       : $AWS_ACCOUNT" -ForegroundColor Gray
+Write-Host "  S3 Deployments Bucket: $S3_BUCKET" -ForegroundColor Gray
+Write-Host "  SQS Builds Queue     : $mainQueueUrl" -ForegroundColor Gray
 Write-Host ""
-Write-Host "━━━ MANUAL STEPS REMAINING ━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Magenta
+Write-Host "==================================================================" -ForegroundColor Cyan
+Write-Host "               CLOUDFLARE DNS CONFIGURATION (1-TIME)             " -ForegroundColor Cyan
+Write-Host "==================================================================" -ForegroundColor Cyan
+Write-Host "  In your Cloudflare DNS dashboard for domain '$DOMAIN':" -ForegroundColor White
 Write-Host ""
-Write-Host "  1. CLOUDFLARE DNS → Add these two A records:" -ForegroundColor White
-Write-Host "       servhub.$DOMAIN      →  $EC2_IP  (Proxied)" -ForegroundColor Gray
-Write-Host "       api-servhub.$DOMAIN  →  $EC2_IP  (Proxied)" -ForegroundColor Gray
-Write-Host "     SSL/TLS mode → set to 'Full'" -ForegroundColor Gray
+Write-Host "    Type   Name          IPv4 Address   Proxy status" -ForegroundColor Gray
+Write-Host "    A      servhub       $EC2_IP        Proxied (Orange Cloud)" -ForegroundColor Yellow
+Write-Host "    A      api-servhub   $EC2_IP        Proxied (Orange Cloud)" -ForegroundColor Yellow
 Write-Host ""
-Write-Host "  2. SUPABASE → Authentication → URL Configuration:" -ForegroundColor White
-Write-Host "       Site URL     : https://$APP_DOMAIN" -ForegroundColor Gray
-Write-Host "       Redirect URLs: https://$APP_DOMAIN/dashboard" -ForegroundColor Gray
+Write-Host "  *Note: Because this is an Elastic IP, you will NEVER need to" -ForegroundColor DarkGray
+Write-Host "   change these Cloudflare records again, even on redeployments!" -ForegroundColor DarkGray
 Write-Host ""
-Write-Host "  3. GITHUB OAuth App → Developer Settings → OAuth Apps:" -ForegroundColor White
-Write-Host "       Homepage URL  : https://$APP_DOMAIN" -ForegroundColor Gray
-Write-Host "       Callback URL  : https://xkldqliccvgrfnckrlyw.supabase.co/auth/v1/callback" -ForegroundColor Gray
+Write-Host "==================================================================" -ForegroundColor Green
+Write-Host "  App URL : https://$APP_DOMAIN" -ForegroundColor Green
+Write-Host "  API URL : https://$API_DOMAIN" -ForegroundColor Green
+Write-Host "==================================================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Green
-Write-Host ""
-Write-Host "SSH into server: ssh -i '$KEY_PATH' ubuntu@$EC2_IP" -ForegroundColor DarkGray
-Write-Host "API logs       : ssh then 'sudo docker logs -f servhub-api'" -ForegroundColor DarkGray
-Write-Host "Builder logs   : ssh then 'sudo docker logs -f servhub-builder'" -ForegroundColor DarkGray
