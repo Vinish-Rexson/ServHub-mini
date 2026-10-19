@@ -11,7 +11,7 @@
 | **Production Dashboard** | [https://servhub.4istudios.in](https://servhub.4istudios.in) | `Active` (HTTP 200) | React SPA frontend for project, build & deployment management |
 | **Fastify API / Health** | [https://api-servhub.4istudios.in/health](https://api-servhub.4istudios.in/health) | `Active` (HTTP 200) | Backend REST API & GitHub Webhook ingress |
 | **Edge Domain Base** | `https://*.4istudios.in` | `Active` | Custom SSL edge subdomains for user deployments |
-| **Permanent Elastic IP** | `13.204.100.149` | `Active` | AWS Mumbai (`ap-south-1`) static public IPv4 |
+| **Permanent Elastic IP** | `Protected (AWS EIP)` | `Active` | AWS Mumbai (`ap-south-1`) static public IPv4 (Proxied via Cloudflare) |
 
 ---
 
@@ -40,7 +40,7 @@ flowchart TD
     subgraph Edge & Ingress
         GH -->|Webhook HMAC SHA-256| CF[Cloudflare DNS & Proxy]
         USER[End User / Browser] -->|HTTPS TLS 1.3| CF
-        CF --> EIP[Elastic IP 13.204.100.149]
+        CF --> EIP[Elastic IP / Static IPv4]
         EIP --> NGINX[Nginx Reverse Proxy on EC2]
     end
 
@@ -78,7 +78,7 @@ All cloud infrastructure is provisioned and managed via automated, idempotent Po
 | **Host Compute** | **Amazon EC2** | `servhub-prod` (`t4g.medium` — 2 vCPU, 4GB RAM, ARM64 Graviton2) | `ap-south-1` (Mumbai) | Hosts Fastify API container, Nginx reverse proxy, and dashboard assets |
 | **Build Worker** | **AWS ECS Fargate Spot** | `servhub-mini-builder-service` (`FARGATE_SPOT`, 1 vCPU, 2GB RAM, ARM64) | `ap-south-1` (Mumbai) | Isolated, autoscaling serverless container that polls SQS and builds projects |
 | **Worker Networking** | **VPC Public Subnets** | `assignPublicIp: ENABLED` via default VPC Internet Gateway | `ap-south-1` (Mumbai) | **Zero-Cost Optimization**: Outbound internet for npm/git with **$0 NAT Gateway costs** |
-| **Elastic IP** | **Amazon EC2 EIP** | `servhub-eip` (`13.204.100.149`) | `ap-south-1` (Mumbai) | Permanent, static public IPv4 address ensuring Cloudflare DNS never breaks |
+| **Elastic IP** | **Amazon EC2 EIP** | `servhub-eip` (`<ALLOCATED_ELASTIC_IP>`) | `ap-south-1` (Mumbai) | Permanent, static public IPv4 address ensuring Cloudflare DNS never breaks |
 | **OS & AMI** | **Canonical Ubuntu** | Ubuntu 24.04 LTS ARM64 (`ami-060a59f869a11dca4`) | `ap-south-1` (Mumbai) | Secure ARM64 base operating system with 20GB gp3 EBS storage |
 | **Firewall / SG** | **EC2 Security Group** | `servhub-sg` (Inbound: 22 SSH, 80 HTTP, 443 HTTPS; Outbound: 0.0.0.0/0) | `ap-south-1` (Mumbai) | Host network access control |
 | **Task Roles** | **AWS IAM** | `servhub-mini-builder-task-role` & `ecsTaskExecutionRole` | Global | Temporary credentials for SQS polling, S3 uploads, and ECR image pulls |
@@ -165,8 +165,8 @@ Once the deployment finishes and gives you the Elastic IP, add these two A recor
 
 | Type | Name | Content / IPv4 | Proxy Status |
 |---|---|---|---|
-| **A** | `servhub` | `13.204.100.149` | **Proxied (Orange Cloud)** |
-| **A** | `api-servhub` | `13.204.100.149` | **Proxied (Orange Cloud)** |
+| **A** | `servhub` | `<YOUR_ELASTIC_IP>` | **Proxied (Orange Cloud)** |
+| **A** | `api-servhub` | `<YOUR_ELASTIC_IP>` | **Proxied (Orange Cloud)** |
 
 *Because an Elastic IP is allocated, you never have to reconfigure DNS even after redeployments or server reboots.*
 
@@ -192,7 +192,6 @@ ServHub-mini/
 │   ├── cloudwatch-dashboard.json
 │   ├── ec2-role-policy.json
 │   ├── ecs-network-config.json
-│   ├── fargate-task-def.json
 │   ├── fix-uuid-defaults.sql
 │   └── nginx-servhub.conf
 ├── .env.deploy.template # Deployment credentials template
@@ -245,9 +244,3 @@ npm run dev:dashboard
 # Run Builder Worker
 npm run dev:builder
 ```
-
----
-
-## 📜 License
-
-This project is licensed under the [MIT License](LICENSE).
