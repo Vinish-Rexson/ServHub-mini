@@ -4,6 +4,7 @@ import { ArrowLeft, ExternalLink, Loader2 } from "lucide-react";
 import { fetchApi } from "../lib/api";
 import { resolveDeploymentUrl } from "../lib/deploymentUrl";
 import { supabase } from "../lib/supabase";
+import { PageLoader, StateNotice } from "../components/PageState";
 
 type Deployment = {
   id: string;
@@ -73,6 +74,8 @@ export const DeploymentView: React.FC = () => {
   const [deployment, setDeployment] = useState<Deployment | null>(null);
   const [logs, setLogs] = useState<BuildLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const terminalRef = useRef<HTMLDivElement>(null);
   // Use a ref so React StrictMode's double-effect invocation doesn't
   // block setIsLoading(false) via a stale closure value.
@@ -89,17 +92,22 @@ export const DeploymentView: React.FC = () => {
     setIsLoading(true);
     setDeployment(null);
     setLogs([]);
+    setLoadError(null);
 
     const loadData = async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5_000);
       try {
-        const depData = await fetchApi<DeploymentResponse>(`/deployments/${id}`);
+        const depData = await fetchApi<DeploymentResponse>(`/deployments/${id}`, { signal: controller.signal });
         if (mountedRef.current) {
           setDeployment(depData);
           setLogs(Array.isArray(depData.buildLogs) ? depData.buildLogs : []);
         }
       } catch (error) {
         console.error("Failed to load deployment:", error);
+        if (mountedRef.current) setLoadError(error instanceof Error ? error.message : "Unable to load deployment");
       } finally {
+        clearTimeout(timeout);
         if (mountedRef.current) setIsLoading(false);
       }
     };
@@ -143,7 +151,7 @@ export const DeploymentView: React.FC = () => {
       void depSubscription.unsubscribe();
       void logsSubscription.unsubscribe();
     };
-  }, [id]);
+  }, [id, loadAttempt]);
 
   useEffect(() => {
     if (terminalRef.current) {
@@ -153,14 +161,12 @@ export const DeploymentView: React.FC = () => {
 
   if (isLoading) {
     return (
-      <div className="container flex justify-center mt-8">
-        <Loader2 className="animate-spin text-muted" size={32} />
-      </div>
+      <div className="container"><PageLoader label="Loading deployment" /></div>
     );
   }
 
   if (!deployment) {
-    return <div className="container text-center mt-8">Deployment not found</div>;
+    return <div className="container"><StateNotice title="Deployment unavailable" message={loadError || "This deployment could not be found."} onRetry={() => setLoadAttempt((attempt) => attempt + 1)} /></div>;
   }
 
   const getStatusBadge = (status: string) => {
@@ -172,7 +178,7 @@ export const DeploymentView: React.FC = () => {
 
   return (
     <div className="container">
-      <div className="mb-8 flex items-center justify-between">
+      <div className="page-header">
         <div className="flex items-center gap-4">
           <Link to={`/projects/${deployment.projectId}`} className="btn btn-outline" style={{ padding: "0.5rem" }}>
             <ArrowLeft size={20} />

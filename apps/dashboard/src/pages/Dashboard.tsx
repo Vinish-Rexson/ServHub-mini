@@ -4,6 +4,7 @@ import { Plus, FolderGit2, Loader2 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { fetchApi } from "../lib/api";
 import { Logo } from "../components/Logo";
+import { PageLoader } from "../components/PageState";
 
 type Project = {
   id: string;
@@ -158,7 +159,7 @@ export const Dashboard: React.FC = () => {
 
   return (
     <div className="container">
-      <nav className="navbar" style={{ margin: "-2rem -2rem 2rem -2rem" }}>
+      <nav className="navbar dashboard-nav">
         <div className="nav-brand flex items-center gap-2">
           <Logo size={24} />
           ServHub
@@ -169,8 +170,12 @@ export const Dashboard: React.FC = () => {
         </div>
       </nav>
 
-      <div className="flex items-center justify-between mb-8">
-        <h1>Projects</h1>
+      <div className="page-header">
+        <div>
+          <div className="page-eyebrow">Overview</div>
+          <h1>Projects</h1>
+          <p className="text-muted">Manage and deploy your connected repositories.</p>
+        </div>
         <button className="btn btn-primary" onClick={() => setIsModalOpen(true)}>
           <Plus size={16} />
           New Project
@@ -178,11 +183,9 @@ export const Dashboard: React.FC = () => {
       </div>
 
       {isLoading ? (
-        <div className="flex justify-center mt-8">
-          <Loader2 className="animate-spin text-muted" size={32} style={{ animation: "spin 1s linear infinite" }} />
-        </div>
+        <PageLoader label="Loading projects" />
       ) : projects.length === 0 ? (
-        <div className="card flex flex-col items-center justify-center gap-4" style={{ padding: "4rem 2rem", textAlign: "center" }}>
+        <div className="card empty-state flex flex-col items-center justify-center gap-4" style={{ padding: "4rem 2rem", textAlign: "center" }}>
           <FolderGit2 size={48} className="text-muted" />
           <h3>No projects yet</h3>
           <p className="text-muted">Connect a GitHub repository to get started.</p>
@@ -191,7 +194,7 @@ export const Dashboard: React.FC = () => {
           </button>
         </div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: "1.5rem" }}>
+        <div className="projects-grid">
           {projects.map((project) => (
             <Link to={`/projects/${project.id}`} key={project.id} className="card project-card-link" style={{ display: "block" }}>
               <div className="flex items-center justify-between mb-4">
@@ -209,11 +212,8 @@ export const Dashboard: React.FC = () => {
       )}
 
       {isModalOpen && (
-        <div style={{
-          position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
-          backgroundColor: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50
-        }}>
-          <div className="card" style={{ width: "100%", maxWidth: "600px", margin: "1rem", maxHeight: "80vh", display: "flex", flexDirection: "column" }}>
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Import Git repository">
+          <div className="card modal-card">
             <div className="flex items-center justify-between mb-4">
               <h2 style={{ margin: 0 }}>Import Git Repository</h2>
               <button className="btn btn-outline" style={{ padding: "0.25rem 0.5rem" }} onClick={() => setIsModalOpen(false)}>Close</button>
@@ -229,7 +229,7 @@ export const Dashboard: React.FC = () => {
               autoFocus
             />
 
-            <div style={{ overflowY: "auto", flex: 1, borderTop: "1px solid var(--border-color)", margin: "0 -2rem", padding: "0 2rem" }}>
+            <div className="repo-list">
               {isLoadingRepos ? (
                 <div className="flex flex-col items-center my-8 gap-2">
                   <Loader2 className="animate-spin text-muted" size={24} />
@@ -245,7 +245,7 @@ export const Dashboard: React.FC = () => {
               ) : (
                 <div className="flex flex-col gap-2 py-4">
                   {filteredRepos.map((repo) => (
-                    <div key={repo.id} className="flex items-center justify-between p-3" style={{ border: "1px solid var(--border-color)", borderRadius: "var(--radius-md)", backgroundColor: "var(--bg-secondary)" }}>
+                    <div key={repo.id} className="repo-row flex items-center justify-between p-3" style={{ border: "1px solid var(--border-color)", borderRadius: "var(--radius-md)", backgroundColor: "var(--bg-secondary)" }}>
                       <div className="flex items-center gap-3">
                         <FolderGit2 size={20} className="text-muted" />
                         <div>

@@ -1,90 +1,43 @@
 import React from "react";
 import { Link } from "react-router-dom";
-import { Rocket, Server, Globe, Zap, GitBranch, ArrowRight } from "lucide-react";
+import { ArrowRight, GitBranch, Globe2, ShieldCheck } from "lucide-react";
 import { Logo } from "../components/Logo";
 
-export const Landing: React.FC = () => {
-  return (
-    <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", backgroundColor: "var(--bg-primary)" }}>
-      <nav style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", maxWidth: "1200px", margin: "0 auto", padding: "1.5rem 2rem" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-          <Logo size={32} />
-          <span style={{ fontWeight: 700, fontSize: "1.25rem", letterSpacing: "-0.05em" }}>ServHub</span>
+export const Landing: React.FC = () => (
+  <div className="marketing-page">
+    <nav className="marketing-nav">
+      <Link to="/" className="marketing-brand" aria-label="ServHub home"><Logo size={28} /><span>ServHub</span></Link>
+      <div className="marketing-actions"><Link to="/login" className="marketing-login">Log in</Link><Link to="/login" className="btn btn-primary">Create account <ArrowRight size={15} /></Link></div>
+    </nav>
+    <main>
+      <section className="hero">
+        <div className="hero-copy">
+          <p className="hero-kicker"><span /> A simpler way to ship client work</p>
+          <h1>Deploy small projects on infrastructure you already own.</h1>
+          <p className="hero-summary">ServHub gives studios a focused place to publish prototypes, landing pages, and client sites through their own domain, CDN, and cloud resources.</p>
+          <div className="hero-actions"><Link to="/login" className="btn btn-primary">Open your workspace <ArrowRight size={16} /></Link><a href="#workflow" className="btn btn-outline">How ServHub fits in</a></div>
+          <p className="hero-note">Built for the practical work between idea and a live client link.</p>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
-          <Link to="/login" style={{ fontSize: "0.875rem", fontWeight: 500, color: "var(--text-secondary)", textDecoration: "none" }}>
-            Log in
-          </Link>
-          <Link to="/login" className="btn btn-primary" style={{ padding: "0.5rem 1rem", fontSize: "0.875rem", textDecoration: "none" }}>
-            Sign up
-          </Link>
-        </div>
-      </nav>
-
-      {/* Hero Section */}
-      <main style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", padding: "5rem 1.5rem", maxWidth: "1000px", margin: "0 auto", width: "100%" }}>
-        <div className="mb-8 flex items-center gap-2" style={{ padding: "0.25rem 0.75rem", borderRadius: "9999px", fontSize: "0.875rem", fontWeight: 500, backgroundColor: "var(--bg-tertiary)", border: "1px solid var(--border-color)", display: "inline-flex" }}>
-          <span style={{ display: "block", height: "8px", width: "8px", borderRadius: "50%", backgroundColor: "#22c55e" }}></span>
-          ServHub Mini is now live
-        </div>
-        
-        <h1 style={{ fontSize: "clamp(2.5rem, 8vw, 4.5rem)", fontWeight: 800, letterSpacing: "-0.05em", marginBottom: "2rem", lineHeight: 1.1, color: "var(--text-primary)" }}>
-          Deploy your code in seconds.
-        </h1>
-        
-        <p className="text-muted" style={{ fontSize: "clamp(1.125rem, 2vw, 1.5rem)", marginBottom: "3rem", maxWidth: "42rem", margin: "0 auto 3rem auto", lineHeight: 1.6 }}>
-          The fastest way to deploy static sites and frontend frameworks. Connect your GitHub repository and we'll handle the rest.
-        </p>
-
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "1rem", justifyContent: "center", alignItems: "center", width: "100%" }}>
-          <Link to="/login" className="btn btn-primary flex items-center gap-2" style={{ padding: "0.875rem 2rem", fontSize: "1.125rem", borderRadius: "8px", minWidth: "200px" }}>
-            <Rocket size={20} />
-            Start Deploying
-          </Link>
-          <a href="#features" className="btn btn-outline flex items-center gap-2" style={{ padding: "0.875rem 2rem", fontSize: "1.125rem", borderRadius: "8px", minWidth: "200px" }}>
-            Explore Features
-          </a>
-        </div>
-
-        {/* Feature grid */}
-        <div id="features" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "2rem", marginTop: "8rem", textAlign: "left", width: "100%" }}>
-          <div className="card" style={{ padding: "2rem" }}>
-            <div className="mb-4 flex items-center justify-center" style={{ width: "48px", height: "48px", borderRadius: "12px", backgroundColor: "var(--bg-tertiary)" }}>
-              <GitBranch size={24} />
-            </div>
-            <h3 style={{ fontSize: "1.25rem", fontWeight: 700, marginBottom: "0.5rem" }}>GitHub Integration</h3>
-            <p className="text-muted" style={{ lineHeight: 1.6, margin: 0 }}>Push to your repository and we automatically build and deploy your changes. Every commit gets a unique URL.</p>
+        <div className="hero-panel" aria-label="ServHub workflow">
+          <div className="panel-topline"><span>One studio workflow</span><span>ServHub</span></div>
+          <div className="infrastructure-list">
+            <div><GitBranch size={18} /><span><strong>Your repositories</strong><small>Projects stay connected to the source you work from.</small></span></div>
+            <div><Globe2 size={18} /><span><strong>Your domain and CDN</strong><small>Publish under the web presence your studio already manages.</small></span></div>
+            <div><ShieldCheck size={18} /><span><strong>Your cloud resources</strong><small>Keep deployment ownership close to the client work.</small></span></div>
           </div>
-          
-          <div className="card" style={{ padding: "2rem" }}>
-            <div className="mb-4 flex items-center justify-center" style={{ width: "48px", height: "48px", borderRadius: "12px", backgroundColor: "var(--bg-tertiary)" }}>
-              <Zap size={24} />
-            </div>
-            <h3 style={{ fontSize: "1.25rem", fontWeight: 700, marginBottom: "0.5rem" }}>Lightning Fast</h3>
-            <p className="text-muted" style={{ lineHeight: 1.6, margin: 0 }}>Our optimized build pipeline ensures your site is live in seconds, not minutes. Instant rollbacks included.</p>
-          </div>
-
-          <div className="card" style={{ padding: "2rem" }}>
-            <div className="mb-4 flex items-center justify-center" style={{ width: "48px", height: "48px", borderRadius: "12px", backgroundColor: "var(--bg-tertiary)" }}>
-              <Globe size={24} />
-            </div>
-            <h3 style={{ fontSize: "1.25rem", fontWeight: 700, marginBottom: "0.5rem" }}>Global Edge</h3>
-            <p className="text-muted" style={{ lineHeight: 1.6, margin: 0 }}>Your content is served from the edge, closer to your users, guaranteeing low latency and high availability worldwide.</p>
-          </div>
-
-          <div className="card" style={{ padding: "2rem" }}>
-            <div className="mb-4 flex items-center justify-center" style={{ width: "48px", height: "48px", borderRadius: "12px", backgroundColor: "var(--bg-tertiary)" }}>
-              <Server size={24} />
-            </div>
-            <h3 style={{ fontSize: "1.25rem", fontWeight: 700, marginBottom: "0.5rem" }}>Zero Configuration</h3>
-            <p className="text-muted" style={{ lineHeight: 1.6, margin: 0 }}>Focus on writing code instead of managing infrastructure. We automatically detect your framework and configure the optimal build settings.</p>
-          </div>
+          <p className="panel-caption">A lightweight deployment layer for teams delivering many small, polished web projects.</p>
         </div>
-      </main>
-
-      <footer style={{ borderTop: "1px solid var(--border-color)", padding: "2rem", marginTop: "3rem", textAlign: "center", fontSize: "0.875rem", color: "var(--text-muted)" }}>
-        <p>&copy; {new Date().getFullYear()} ServHub Mini. All rights reserved.</p>
-      </footer>
-    </div>
-  );
-};
+      </section>
+      <section className="confidence-row" aria-label="Platform capabilities"><span><GitBranch size={16} /> Built around GitHub repositories</span><span><Globe2 size={16} /> Made for your domain and delivery setup</span><span><ShieldCheck size={16} /> Clear ownership for client releases</span></section>
+      <section id="workflow" className="workflow-section">
+        <div className="section-intro"><p className="section-label">A straightforward release loop</p><h2>Keep client deployment work in your own ecosystem.</h2></div>
+        <div className="workflow-grid">
+          <article><span>01</span><h3>Bring in the project</h3><p>Connect a GitHub repository when a prototype or client page is ready to move beyond a local preview.</p></article>
+          <article><span>02</span><h3>Deploy to your stack</h3><p>Trigger a release while keeping delivery on the domain, CDN, and cloud resources your studio controls.</p></article>
+          <article><span>03</span><h3>Hand over a live link</h3><p>Use the deployment history to keep a clean record of what is live for each client project.</p></article>
+        </div>
+      </section>
+    </main>
+    <footer className="marketing-footer"><span>© {new Date().getFullYear()} ServHub</span><span>A deployment workspace for studio client work.</span></footer>
+  </div>
+);

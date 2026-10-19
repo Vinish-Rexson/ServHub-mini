@@ -6,12 +6,13 @@ import { Dashboard } from "./pages/Dashboard";
 import { Landing } from "./pages/Landing";
 import { ProjectDetails } from "./pages/ProjectDetails";
 import { DeploymentView } from "./pages/Deployment";
+import { FullPageLoader } from "./components/PageState";
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, isLoading } = useAuth();
 
   if (isLoading) {
-    return <div className="flex items-center justify-center" style={{ minHeight: "100vh" }}>Loading...</div>;
+    return <FullPageLoader label="Checking your session" />;
   }
 
   if (!user) {

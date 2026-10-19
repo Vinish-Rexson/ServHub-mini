@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, ExternalLink, GitBranch, GitCommit, Loader2, Trash2 } from "lucide-react";
 import { fetchApi } from "../lib/api";
 import { resolveDeploymentUrl } from "../lib/deploymentUrl";
+import { PageLoader, StateNotice } from "../components/PageState";
 
 type Deployment = {
   id: string;
@@ -29,10 +30,12 @@ export const ProjectDetails: React.FC = () => {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [deploymentsError, setDeploymentsError] = useState<string | null>(null);
   const [isDeploying, setIsDeploying] = useState(false);
   const [deployError, setDeployError] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
   useEffect(() => {
     if (!id) {
@@ -44,19 +47,29 @@ export const ProjectDetails: React.FC = () => {
     const loadData = async () => {
       const requestSeq = ++requestSeqRef.current;
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 12_000);
+      const timeout = setTimeout(() => controller.abort(), 5_000);
 
       try {
         setIsLoading(true);
         setErrorMessage(null);
-        const [projData, depData] = await Promise.all([
+        setDeploymentsError(null);
+        const [projectResult, deploymentsResult] = await Promise.allSettled([
           fetchApi<Project>(`/projects/${id}`, { signal: controller.signal }),
           fetchApi<Deployment[]>(`/projects/${id}/deployments`, { signal: controller.signal })
         ]);
 
+        if (projectResult.status === "rejected") {
+          throw projectResult.reason;
+        }
+
         if (requestSeq === requestSeqRef.current) {
-          setProject(projData);
-          setDeployments(depData);
+          setProject(projectResult.value);
+          if (deploymentsResult.status === "fulfilled") {
+            setDeployments(deploymentsResult.value);
+          } else {
+            setDeployments([]);
+            setDeploymentsError("Deployment history is temporarily unavailable. Try refreshing in a moment.");
+          }
         }
       } catch (error) {
         console.error("Failed to load project details:", error);
@@ -73,21 +86,17 @@ export const ProjectDetails: React.FC = () => {
     };
 
     loadData();
-  }, [id]);
+  }, [id, loadAttempt]);
 
   if (isLoading) {
     return (
-      <div className="container flex justify-center mt-8">
-        <Loader2 className="animate-spin text-muted" size={32} />
-      </div>
+      <div className="container"><PageLoader label="Loading project" /></div>
     );
   }
 
   if (!project) {
     return (
-      <div className="container text-center mt-8">
-        {errorMessage || "Project not found"}
-      </div>
+      <div className="container"><StateNotice title="Project unavailable" message={errorMessage || "This project could not be found."} onRetry={() => setLoadAttempt((attempt) => attempt + 1)} /></div>
     );
   }
 
@@ -144,7 +153,8 @@ export const ProjectDetails: React.FC = () => {
 
   return (
     <div className="container">
-      <div className="mb-8 flex items-center gap-4">
+      <div className="page-header">
+        <div className="flex items-center gap-4">
         <Link to="/dashboard" className="btn btn-outline" style={{ padding: "0.5rem" }}>
           <ArrowLeft size={20} />
         </Link>
@@ -152,6 +162,8 @@ export const ProjectDetails: React.FC = () => {
           <h1 style={{ margin: 0 }}>{project.name}</h1>
           <p className="text-muted" style={{ margin: 0 }}>{project.repoFullName}</p>
         </div>
+        </div>
+        <div className="danger-confirm">
         {latestLiveUrl && (
           <a
             href={latestLiveUrl}
@@ -186,6 +198,7 @@ export const ProjectDetails: React.FC = () => {
             <Trash2 size={14} /> Delete
           </button>
         )}
+        </div>
       </div>
 
       <div className="card">
@@ -214,19 +227,22 @@ export const ProjectDetails: React.FC = () => {
             {deployError}
           </p>
         )}
+        {deploymentsError && (
+          <p className="inline-warning" role="status">{deploymentsError}</p>
+        )}
 
         {deployments.length === 0 ? (
           <div className="text-center text-muted" style={{ padding: "3rem" }}>
             <p>No deployments yet. Click Deploy to start the first build.</p>
           </div>
         ) : (
-          <div className="flex flex-col gap-4">
+          <div className="deployment-list">
             {deployments.map((dep) => {
               const liveUrl = resolveDeploymentUrl(dep.id, dep.deployedUrl);
               const isLatestLive = latestLiveDeployment?.id === dep.id;
 
               return (
-                <div key={dep.id} className="flex items-center justify-between" style={{ padding: "1rem", border: "1px solid var(--border-color)", borderRadius: "var(--radius-md)" }}>
+                <div key={dep.id} className="deployment-row flex items-center justify-between">
                   <div className="flex flex-col gap-2">
                     <div className="flex items-center gap-2">
                       <Link to={`/deployments/${dep.id}`} className="font-medium" style={{ fontSize: "1.125rem" }}>
@@ -237,7 +253,7 @@ export const ProjectDetails: React.FC = () => {
                         <span style={{ fontSize: "0.7rem", background: "var(--color-success, #22c55e)", color: "#fff", borderRadius: "4px", padding: "2px 7px", fontWeight: 600 }}>LIVE</span>
                       )}
                     </div>
-                    <div className="flex items-center gap-4 text-sm text-muted">
+                    <div className="deployment-meta text-sm text-muted">
                       <span className="flex items-center gap-1"><GitBranch size={14} /> {dep.branch}</span>
                       <span className="flex items-center gap-1"><GitCommit size={14} /> {dep.commitSha.slice(0, 7)}</span>
                       <span>{new Date(dep.createdAt).toLocaleString()}</span>
