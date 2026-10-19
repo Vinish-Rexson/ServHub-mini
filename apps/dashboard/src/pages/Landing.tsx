@@ -2,6 +2,7 @@ import React from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight, GitBranch, Globe2, ShieldCheck } from "lucide-react";
 import { Logo } from "../components/Logo";
+import { GithubIcon } from "../components/GithubIcon";
 import { useAuth } from "../contexts/AuthContext";
 
 export const Landing: React.FC = () => {
@@ -23,6 +24,17 @@ export const Landing: React.FC = () => {
           <span>ServHub</span>
         </Link>
         <div className="marketing-actions">
+          <a
+            href="https://github.com/Vinish-Rexson/ServHub-mini"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="marketing-github-link"
+            aria-label="View on GitHub"
+            title="View ServHub on GitHub"
+          >
+            <GithubIcon size={18} />
+            <span className="github-link-label">GitHub</span>
+          </a>
           {user ? (
             <Link
               to="/dashboard"

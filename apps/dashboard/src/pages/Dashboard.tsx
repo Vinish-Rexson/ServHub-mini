@@ -4,6 +4,7 @@ import { Plus, FolderGit2, Loader2 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { fetchApi } from "../lib/api";
 import { Logo } from "../components/Logo";
+import { GithubIcon } from "../components/GithubIcon";
 import { PageLoader } from "../components/PageState";
 
 type Project = {
@@ -165,6 +166,17 @@ export const Dashboard: React.FC = () => {
           <span>ServHub</span>
         </Link>
         <div className="flex items-center gap-4">
+          <a
+            href="https://github.com/Vinish-Rexson/ServHub-mini"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="marketing-github-link"
+            aria-label="View on GitHub"
+            title="View ServHub on GitHub"
+          >
+            <GithubIcon size={18} />
+            <span className="github-link-label">GitHub</span>
+          </a>
           <div className="text-sm text-muted">{user?.email}</div>
           <button className="btn btn-outline" onClick={signOut}>Logout</button>
         </div>

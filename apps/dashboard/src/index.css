@@ -313,6 +313,26 @@ button, .btn {
 .marketing-nav { height: 80px; display: flex; align-items: center; justify-content: space-between; }
 .marketing-brand { display: flex; align-items: center; gap: .55rem; color: var(--text-primary); font-weight: 700; letter-spacing: -.04em; font-size: 1.125rem; }
 .marketing-actions, .hero-actions { display: flex; align-items: center; gap: .75rem; }
+.marketing-github-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  padding: 0.4rem 0.7rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-primary);
+  transition: all 0.15s ease;
+  text-decoration: none;
+}
+.marketing-github-link:hover {
+  color: var(--text-primary);
+  background-color: var(--bg-tertiary);
+  border-color: #cbd5e1;
+  text-decoration: none;
+}
 .marketing-login { color: var(--text-secondary); font-size: .875rem; font-weight: 500; padding: .5rem; }
 .hero { min-height: 540px; display: grid; grid-template-columns: 1.08fr .92fr; gap: clamp(3rem, 8vw, 8rem); align-items: center; padding: 4.5rem 0 5rem; }
 .hero-copy { max-width: 640px; }
@@ -380,3 +400,10 @@ button, .btn {
   .workflow-grid h3 { margin-top: 1.5rem; }
   .marketing-footer { gap: .5rem; align-items: flex-start; flex-direction: column; }
 }
+
+@media (max-width: 500px) {
+  .github-link-label {
+    display: none;
+  }
+}
+
