@@ -275,6 +275,13 @@ button, .btn {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  text-decoration: none;
+}
+
+.nav-brand:hover {
+  text-decoration: none;
+  color: var(--text-primary);
+  opacity: 0.85;
 }
 
 /* Terminal Log View */

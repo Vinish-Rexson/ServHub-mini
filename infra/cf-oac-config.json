@@ -1,7 +1,0 @@
-{
-  "Name": "servhub-mini-s3-oac",
-  "Description": "OAC for servhub-mini deployments bucket",
-  "SigningProtocol": "sigv4",
-  "SigningBehavior": "always",
-  "OriginAccessControlOriginType": "s3"
-}

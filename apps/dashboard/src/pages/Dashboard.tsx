@@ -160,10 +160,10 @@ export const Dashboard: React.FC = () => {
   return (
     <div className="container">
       <nav className="navbar dashboard-nav">
-        <div className="nav-brand flex items-center gap-2">
+        <Link to="/" className="nav-brand flex items-center gap-2" aria-label="ServHub home">
           <Logo size={24} />
-          ServHub
-        </div>
+          <span>ServHub</span>
+        </Link>
         <div className="flex items-center gap-4">
           <div className="text-sm text-muted">{user?.email}</div>
           <button className="btn btn-outline" onClick={signOut}>Logout</button>

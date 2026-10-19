@@ -1,0 +1,28 @@
+{
+    "Version":  "2012-10-17",
+    "Statement":  [
+                      {
+                          "Effect":  "Allow",
+                          "Resource":  "arn:aws:sqs:ap-south-1:362095365756:*",
+                          "Action":  [
+                                         "sqs:ReceiveMessage",
+                                         "sqs:DeleteMessage",
+                                         "sqs:ChangeMessageVisibility",
+                                         "sqs:GetQueueAttributes"
+                                     ]
+                      },
+                      {
+                          "Effect":  "Allow",
+                          "Resource":  [
+                                           "arn:aws:s3:::servhub-mini-deployments-362095365756",
+                                           "arn:aws:s3:::servhub-mini-deployments-362095365756/*"
+                                       ],
+                          "Action":  [
+                                         "s3:PutObject",
+                                         "s3:GetObject",
+                                         "s3:DeleteObject",
+                                         "s3:ListBucket"
+                                     ]
+                      }
+                  ]
+}

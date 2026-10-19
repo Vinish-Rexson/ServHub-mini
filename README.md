@@ -1,6 +1,6 @@
-# ServHub Mini — Cloud Deployment Platform
+# ServHub Mini — Automated Cloud Deployment Platform
 
-> A lightweight, automated cloud deployment platform (Vercel alternative) powered by AWS Graviton2 ARM64, Supabase Realtime, and Cloudflare.
+> A lightweight, cost-optimized cloud deployment platform (Vercel alternative) powered by **AWS Graviton2 ARM64**, **AWS ECS Fargate Spot**, **Amazon SQS**, **Supabase Realtime**, and **Cloudflare**.
 
 ---
 
@@ -8,29 +8,28 @@
 
 | Component | Live URL | Status | Details |
 |---|---|---|---|
-| **Production Dashboard** | [https://servhub.4istudios.in](https://servhub.4istudios.in) | `Active` (HTTP 200) | React SPA frontend for project & deployment management |
+| **Production Dashboard** | [https://servhub.4istudios.in](https://servhub.4istudios.in) | `Active` (HTTP 200) | React SPA frontend for project, build & deployment management |
 | **Fastify API / Health** | [https://api-servhub.4istudios.in/health](https://api-servhub.4istudios.in/health) | `Active` (HTTP 200) | Backend REST API & GitHub Webhook ingress |
 | **Edge Domain Base** | `https://*.4istudios.in` | `Active` | Custom SSL edge subdomains for user deployments |
+| **Permanent Elastic IP** | `13.204.100.149` | `Active` | AWS Mumbai (`ap-south-1`) static public IPv4 |
 
 ---
 
 ## 📖 Project Overview
 
-**ServHub Mini** is a developer platform designed to automatically build, package, and serve static sites and modern frontend frameworks (React, Vite, Next.js static, Vue, Astro) with zero manual server configuration.
+**ServHub Mini** is an automated developer platform designed to build, package, and serve modern web applications (React, Vite, Next.js static, Vue, Astro) with zero manual server configuration.
 
 ### How It Works:
-1. **GitHub Integration & OAuth**: Users log in using GitHub OAuth and connect their repositories with automatic webhook provisioning.
-2. **Event Triggering**: A `git push` to GitHub (or a manual click in the dashboard) sends a webhook payload to the Fastify API.
-3. **Job Queueing**: The API validates the HMAC SHA-256 signature, creates database records in Supabase, and publishes a build job to **Amazon SQS**.
-4. **ARM64 Containerized Worker**: An isolated **builder worker** consumes the job from SQS, clones the repository, runs `npm ci --include=dev` and framework build steps (`npm run build`) in an ARM64 Node 24 runtime.
-5. **Realtime Log Streaming**: Build output (`stdout`/`stderr`) is written in real time to Supabase Postgres, streaming live terminal logs to the user's browser via WebSocket replication.
-6. **Edge Distribution**: Build artifacts (`dist/`) are synchronized to an **Amazon S3** bucket and served globally over **Cloudflare TLS 1.3**.
+1. **GitHub Integration & OAuth**: Developers sign in with GitHub OAuth and connect their repositories with automated webhook registration.
+2. **Event Triggering**: A `git push` to a tracked branch (or manual redeploy trigger in the dashboard) delivers a webhook payload to the Fastify API.
+3. **Asynchronous Job Queueing**: The API validates the HMAC SHA-256 signature, creates database records in Supabase, and publishes an isolated build job to **Amazon SQS**.
+4. **AWS ECS Fargate Spot Build Worker**: An ephemeral **AWS ECS Fargate Spot** worker running an ARM64 Node 24 runtime claims the job, clones the repository, executes `npm ci` and the framework build command (`npm run build`).
+5. **Realtime WebSocket Log Streaming**: Every line of `stdout` and `stderr` is streamed directly into Supabase Postgres, broadcasting live terminal logs to the user's dashboard via WebSockets.
+6. **Artifact Storage & Edge Serving**: The generated production bundle (`dist/` or `build/`) is synchronized to **Amazon S3** and served securely with **Cloudflare TLS 1.3**.
 
 ---
 
-## 🏗️ Architecture & Infrastructure
-
-### End-to-End Architecture Flow
+## 🏗️ Architecture & Infrastructure Flow
 
 ```mermaid
 flowchart TD
@@ -38,58 +37,142 @@ flowchart TD
         DEV[Developer] -->|git push| GH[GitHub Repository]
     end
 
-    subgraph Ingress & CDN
-        GH -->|Webhook with HMAC SHA-256| CF[Cloudflare DNS & Proxy]
-        USER[End User] -->|HTTPS TLS 1.3| CF
-        CF --> NGINX[Nginx Reverse Proxy on EC2]
+    subgraph Edge & Ingress
+        GH -->|Webhook HMAC SHA-256| CF[Cloudflare DNS & Proxy]
+        USER[End User / Browser] -->|HTTPS TLS 1.3| CF
+        CF --> EIP[Elastic IP 13.204.100.149]
+        EIP --> NGINX[Nginx Reverse Proxy on EC2]
     end
 
-    subgraph AWS Production Stack ap-southeast-2
+    subgraph AWS Production Stack Mumbai ap-south-1
         NGINX -->|servhub.4istudios.in| DASH[/var/www/dashboard React SPA/]
         NGINX -->|api-servhub.4istudios.in| API[Fastify API Container :3001]
         
         API -->|Publish Build Job| SQS[(Amazon SQS servhub-mini-builds)]
-        SQS -->|Consume Job| BUILDER[Builder Worker Container Node 24 ARM64]
+        SQS -.->|Poison Pill Messages| DLQ[(Amazon SQS Dead-Letter Queue)]
         
-        BUILDER -->|Sync dist/ artifacts| S3[(Amazon S3 Bucket)]
-        API & BUILDER -->|Push container logs| CW[(Amazon CloudWatch)]
+        subgraph AWS ECS Fargate Spot Cluster
+            SQS -->|Long Poll 20s| FARGATE[ECS Fargate Spot Worker 1 vCPU / 2GB ARM64]
+            FARGATE -->|Direct Outbound assignPublicIp| IGW[VPC Internet Gateway $0 NAT Cost]
+        end
+        
+        FARGATE -->|Upload dist/ artifacts| S3[(Amazon S3 Deployments Bucket)]
+        API & FARGATE -->|Container logs awslogs| CW[(Amazon CloudWatch Logs)]
     end
 
-    subgraph Database & Realtime
-        API -->|Prisma Client| PG[(Supabase PostgreSQL)]
-        BUILDER -->|Stream Logs & Update Status| PG
-        PG -.->|Postgres Replication WebSockets| DASH
+    subgraph Database & Realtime ap-south-1
+        API -->|Prisma Pooler :6543| PG[(Supabase PostgreSQL)]
+        FARGATE -->|Insert Build Logs| PG
+        PG -.->|WebSocket Realtime Replication| DASH
     end
 ```
 
 ---
 
-## 🛠️ Infrastructure Stack Table
+## 🛠️ Complete Infrastructure Stack
 
-All cloud infrastructure is provisioned and managed via automated PowerShell deployment scripts (`deploy.ps1`).
+All cloud infrastructure is provisioned and managed via automated, idempotent PowerShell scripts (`deploy.ps1` and `destroy.ps1`).
 
-| Category | Service / Tool | Resource Name / Configuration | Region / Host | Purpose |
+| Layer / Service | AWS Resource | Specification / Configuration | Region | Purpose |
 |---|---|---|---|---|
-| **Compute** | **Amazon EC2** | `servhub-prod` (`t4g.medium` — 2 vCPU, 4GB RAM, ARM64 Graviton2) | `ap-southeast-2` (Sydney) | Primary host server for Docker engine, Nginx proxy, and local storage |
-| **OS & AMI** | **Canonical Ubuntu** | Ubuntu 26.04.1 LTS (`ami-0be7d1b5b9749d43a`) | `ap-southeast-2` | Modern, secure ARM64 operating system with 30GB gp3 EBS volume |
-| **Networking** | **Amazon Elastic IP** | `servhub-eip` (`16.178.61.34`) | `ap-southeast-2` | Static, permanent public IPv4 address attached to EC2 |
-| **Security & Firewall** | **EC2 Security Group** | `servhub-sg` (Ports: 22 SSH, 80 HTTP, 443 HTTPS) | `ap-southeast-2` | Ingress and egress firewall rules protecting host instances |
-| **IAM & Roles** | **AWS IAM** | `servhub-ec2-role` / `servhub-ec2-profile` | Global | Instance profile granting EC2 zero-key access to SQS, S3, ECR & CloudWatch |
-| **Message Queue** | **Amazon SQS** | `servhub-mini-builds` (SSE enabled, 600s visibility) | `ap-southeast-2` | Decouples API from build workers; handles asynchronous build scheduling |
-| **Dead-Letter Queue** | **Amazon SQS DLQ** | `servhub-mini-builds-dlq` (Max receive: 3) | `ap-southeast-2` | Holds poisoned or repeatedly failing build messages for inspection |
-| **Artifact Storage** | **Amazon S3** | `servhub-mini-deployments-681842289425` | `ap-southeast-2` | High-availability object storage for user-deployed web application bundles |
-| **Container Registry** | **Amazon ECR** | `servhub-api`, `servhub-builder` | `ap-southeast-2` | Private Docker registries storing native ARM64 application container images |
-| **Observability** | **Amazon CloudWatch** | `/servhub/api` & `/servhub/builder` log groups | `ap-southeast-2` | Aggregated Docker container logs via AWS native `awslogs` driver |
-| **Monitoring** | **CloudWatch Alarms** | `servhub-builds-dlq-alarm` | `ap-southeast-2` | Alert triggers when messages land in the Dead-Letter Queue |
-| **Database & Auth** | **Supabase** | Project `xkldqliccvgrfnckrlyw` | `aws-1-ap-south-1` | PostgreSQL persistence, Prisma ORM, and GitHub OAuth session handling |
-| **Realtime Logs** | **Supabase Realtime** | Channels: `deployment-{id}`, `logs-{id}` | `aws-1-ap-south-1` | WebSocket streaming of live terminal build logs directly to client browser |
-| **Edge & SSL** | **Cloudflare** | Full/Strict TLS 1.3 Proxy | Global Edge | Edge DDoS protection, automated SSL termination, and wildcard DNS routing |
-| **Web Server** | **Nginx** | Reverse Proxy + Static Server | EC2 Host | Routes traffic between dashboard SPA and backend Fastify REST container |
-| **Runtimes** | **Node.js & Docker** | Node.js 24 Alpine (`node:24-alpine`) | Docker on EC2 | Multi-architecture runtime executing API, worker, and Vite build commands |
+| **Host Compute** | **Amazon EC2** | `servhub-prod` (`t4g.medium` — 2 vCPU, 4GB RAM, ARM64 Graviton2) | `ap-south-1` (Mumbai) | Hosts Fastify API container, Nginx reverse proxy, and dashboard assets |
+| **Build Worker** | **AWS ECS Fargate Spot** | `servhub-mini-builder-service` (`FARGATE_SPOT`, 1 vCPU, 2GB RAM, ARM64) | `ap-south-1` (Mumbai) | Isolated, autoscaling serverless container that polls SQS and builds projects |
+| **Worker Networking** | **VPC Public Subnets** | `assignPublicIp: ENABLED` via default VPC Internet Gateway | `ap-south-1` (Mumbai) | **Zero-Cost Optimization**: Outbound internet for npm/git with **$0 NAT Gateway costs** |
+| **Elastic IP** | **Amazon EC2 EIP** | `servhub-eip` (`13.204.100.149`) | `ap-south-1` (Mumbai) | Permanent, static public IPv4 address ensuring Cloudflare DNS never breaks |
+| **OS & AMI** | **Canonical Ubuntu** | Ubuntu 24.04 LTS ARM64 (`ami-060a59f869a11dca4`) | `ap-south-1` (Mumbai) | Secure ARM64 base operating system with 20GB gp3 EBS storage |
+| **Firewall / SG** | **EC2 Security Group** | `servhub-sg` (Inbound: 22 SSH, 80 HTTP, 443 HTTPS; Outbound: 0.0.0.0/0) | `ap-south-1` (Mumbai) | Host network access control |
+| **Task Roles** | **AWS IAM** | `servhub-mini-builder-task-role` & `ecsTaskExecutionRole` | Global | Temporary credentials for SQS polling, S3 uploads, and ECR image pulls |
+| **Host Role** | **AWS IAM** | `servhub-ec2-role` / `servhub-ec2-profile` | Global | EC2 instance profile granting zero-static-key access to CloudWatch, ECR, and S3 |
+| **Message Queue** | **Amazon SQS** | `servhub-mini-builds` (Standard, SSE enabled, 600s visibility) | `ap-south-1` (Mumbai) | Asynchronous build job pipeline decoupling API from workers |
+| **Dead-Letter Queue**| **Amazon SQS DLQ** | `servhub-mini-builds-dlq` (Max receive count: 3) | `ap-south-1` (Mumbai) | Dead-letter storage for unhandled or repeatedly failing build payloads |
+| **Artifact Storage** | **Amazon S3** | `servhub-mini-deployments-${AWS_ACCOUNT}` | `ap-south-1` (Mumbai) | High-availability object store for compiled project release bundles |
+| **Container Registry**| **Amazon ECR** | `servhub-api`, `servhub-builder` | `ap-south-1` (Mumbai) | Private OCI registry storing native ARM64 container images |
+| **Observability** | **CloudWatch Logs** | `/servhub/api` & `/ecs/servhub-mini-builder` | `ap-south-1` (Mumbai) | Structured log streams with 14-day automated retention policy |
+| **Database & Auth** | **Supabase Postgres** | Dedicated Postgres instance | `aws-1-ap-south-1` (Mumbai) | Low-latency (<2ms) co-located database for metadata, users, and deployments |
+| **Realtime Logs** | **Supabase Realtime** | WebSocket channels: `deployment-{id}` | `aws-1-ap-south-1` (Mumbai) | Real-time terminal streaming of build logs to client dashboard |
+| **Edge & CDN** | **Cloudflare** | Full/Strict TLS 1.3 Proxy | Global Edge | Edge DDoS mitigation, global caching, and wildcard SSL termination |
 
 ---
 
-## 📂 Monorepo Architecture
+## ⚡ Deployment & Teardown Commands
+
+### 1. Automated AWS Deployment (`deploy.ps1`)
+
+The deployment script is fully automated and self-contained. It detects your AWS account identity, provisions all infrastructure, configures security groups, builds ARM64 Docker images natively, registers ECS Fargate tasks, compiles the frontend, and configures Nginx.
+
+```powershell
+# Step 1: Copy and populate your configuration
+Copy-Item .env.deploy.template .env.deploy
+# (Edit .env.deploy with your Supabase credentials, GitHub OAuth keys, and domain)
+
+# Step 2: Run the full infrastructure deployment
+.\deploy.ps1
+
+# Step 3: Fast redeploy (updates containers & dashboard without recreating AWS resources)
+.\deploy.ps1 -Resume
+```
+
+#### What `deploy.ps1` executes automatically:
+1. Validates AWS CLI credentials and caller identity.
+2. Creates EC2 IAM roles, instance profiles, and ECS execution/task roles with least privilege.
+3. Provisions the S3 deployment bucket with versioning and public-access block.
+4. Creates the SQS build queue and Dead-Letter Queue (DLQ) with redrive policy.
+5. Provisions CloudWatch log groups with 14-day retention.
+6. Creates the ECS Cluster with `FARGATE` and `FARGATE_SPOT` capacity providers.
+7. Generates an SSH key pair (`servhub-key`) and security group (`servhub-sg`).
+8. Launches a `t4g.medium` ARM64 Graviton2 instance and associates a permanent Elastic IP.
+9. Connects via SSH, installs Docker, Nginx, and AWS CLI v2.
+10. Packages application sources, builds ARM64 containers directly on EC2, and pushes to ECR.
+11. Starts the `servhub-api` container on port 3001 with native CloudWatch logging.
+12. Registers the `servhub-mini-builder` task definition and deploys the **ECS Fargate Spot service**.
+13. Compiles the React dashboard and uploads static assets to `/var/www/dashboard`.
+14. Generates SSL certificates and reloads Nginx reverse proxy.
+15. Prints the Elastic IP and Cloudflare DNS instructions.
+
+---
+
+### 2. Idempotent Infrastructure Teardown (`destroy.ps1`)
+
+When you want to remove all resources to avoid any ongoing AWS costs, run `destroy.ps1`. The script is **100% idempotent** and can be run safely multiple times.
+
+```powershell
+# Interactive teardown (prompts for confirmation before deleting):
+.\destroy.ps1
+
+# Unattended / CI teardown (skips confirmation prompt):
+.\destroy.ps1 -Force
+
+# Clean up a specific region (default: ap-south-1):
+.\destroy.ps1 -Region ap-south-1 -Force
+```
+
+#### What `destroy.ps1` cleans up:
+- Scales down and deletes the **ECS Fargate Spot Service** and deregisters all task definitions.
+- Deletes the **ECS Cluster** (`servhub-mini-cluster`).
+- Deletes **CloudWatch Log Groups** (`/servhub/api`, `/ecs/servhub-mini-builder`) and alarms.
+- Terminates the **EC2 Instance** (`servhub-prod`) and releases the **Elastic IP** (`servhub-eip`).
+- Deletes the **Security Group** (`servhub-sg`) and **EC2 Key Pair** (`servhub-key`).
+- Deletes the **SQS Queues** (`servhub-mini-builds`, `servhub-mini-builds-dlq`).
+- Empties all versioned objects and deletes the **S3 Bucket** (`servhub-mini-deployments-*`).
+- Force-deletes the **ECR Repositories** (`servhub-api`, `servhub-builder`).
+- Detaches policies and deletes all **IAM Roles and Instance Profiles**.
+
+---
+
+### 3. Cloudflare DNS Mapping (1-Time Setup)
+
+Once the deployment finishes and gives you the Elastic IP, add these two A records in your Cloudflare DNS dashboard:
+
+| Type | Name | Content / IPv4 | Proxy Status |
+|---|---|---|---|
+| **A** | `servhub` | `13.204.100.149` | **Proxied (Orange Cloud)** |
+| **A** | `api-servhub` | `13.204.100.149` | **Proxied (Orange Cloud)** |
+
+*Because an Elastic IP is allocated, you never have to reconfigure DNS even after redeployments or server reboots.*
+
+---
+
+## 📂 Repository Structure
 
 ```
 ServHub-mini/
@@ -98,74 +181,73 @@ ServHub-mini/
 │   │   ├── prisma/      # Database schema (User, Project, Deployment, BuildLog)
 │   │   ├── src/         # Routes: auth, projects, deployments, webhooks
 │   │   └── Dockerfile   # Node 24 Alpine ARM64 multi-stage container
-│   ├── builder/         # Build runner that consumes SQS & executes git/npm builds
+│   ├── builder/         # ECS Fargate Spot build worker
 │   │   ├── src/         # SQS message processor, git clone, npm build, S3 sync
 │   │   └── Dockerfile   # Node 24 Alpine ARM64 container with Git & build tools
 │   └── dashboard/       # React 19 + Vite frontend dashboard
 │       ├── src/         # Pages (Dashboard, ProjectDetails, Deployment, Login)
 │       └── dist/        # Optimized production SPA build served via Nginx
-├── infra/               # IAM policies, trust policies, and provision scripts
-└── deploy.ps1           # End-to-end PowerShell automated AWS deployment script
+├── infra/               # Infrastructure JSON definitions & database migration helpers
+│   ├── builder-task-policy.json
+│   ├── cloudwatch-dashboard.json
+│   ├── ec2-role-policy.json
+│   ├── ecs-network-config.json
+│   ├── fargate-task-def.json
+│   ├── fix-uuid-defaults.sql
+│   └── nginx-servhub.conf
+├── .env.deploy.template # Deployment credentials template
+├── deploy.ps1           # End-to-end automated deployment script
+├── destroy.ps1          # Idempotent infrastructure destruction script
+├── docker-compose.yml   # Local development services
+└── package.json         # Workspace root scripts
 ```
 
 ---
 
-## 🚀 Local Development Setup
+## 💻 Local Development Setup
 
 ### 1. Prerequisites
 - **Node.js 22+ or 24+**
-- **Docker** (optional for local API, required for container builds)
-- **AWS CLI v2** configured with necessary permissions
-- **Supabase Account** with a configured project
+- **Docker**
+- **AWS CLI v2** configured with `aws configure`
+- **Supabase Account** with a PostgreSQL database project
 
-### 2. Environment Configuration
-Clone the repository and copy template files:
+### 2. Environment Setup
 ```bash
-# Root deployment configuration
-copy .env.deploy.template .env.deploy
+# Clone the repository
+git clone https://github.com/your-username/ServHub-mini.git
+cd ServHub-mini
 
-# App-specific environment files
+# Configure environment variables
+copy .env.deploy.template .env.deploy
 copy apps/api/.env.template apps/api/.env
 copy apps/builder/.env.template apps/builder/.env
 copy apps/dashboard/.env.template apps/dashboard/.env
 ```
 
-### 3. Install & Generate
+### 3. Install & Initialize
 ```bash
-# Install workspace dependencies
+# Install root and workspace dependencies
 npm install
 
-# Generate Prisma database client
+# Generate Prisma client
 npm run prisma:generate
 ```
 
-### 4. Running Locally
+### 4. Run Development Servers
 ```bash
-# Run Fastify API in development mode
+# Run Fastify API server
 npm run dev:api
 
-# Run Frontend Dashboard in development mode
+# Run Vite Dashboard frontend
 npm run dev:dashboard
 
-# Run Builder Worker in development mode
+# Run Builder Worker
 npm run dev:builder
 ```
 
 ---
 
-## 🚢 Deploying to Production (AWS)
-
-The entire infrastructure and application stack can be deployed or updated in a single command using the automated deployment script:
-
-```powershell
-# Initial complete setup: provisions EC2, S3, SQS, IAM, Nginx, ECR, and builds apps
-.\deploy.ps1
-
-# Subsequent redeploys: updates images and dashboard without recreating infrastructure
-.\deploy.ps1 -Resume
-```
-
----
-
 ## 📜 License
-This project is licensed under the MIT License.
+
+This project is licensed under the [MIT License](LICENSE).

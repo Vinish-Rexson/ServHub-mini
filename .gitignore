@@ -12,6 +12,8 @@ out/
 !.env.template
 !.env.deploy.template
 *.pem
+infra/fargate-task-def.json
+infra/*.rendered.json
 
 coverage/
 *.log

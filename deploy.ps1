@@ -1,5 +1,5 @@
 ################################################################################
-# ServHub-Mini — Unified Automated Deployment Script with Elastic IP
+# ServHub-Mini --- Unified Automated Deployment Script with Elastic IP
 # Run from: C:\Projects\ServHub-mini
 #
 # FIRST RUN:  .\deploy.ps1
@@ -23,19 +23,24 @@ param(
 $ErrorActionPreference = "Stop"
 $env:AWS_PAGER = ""
 
-# ── LOGGING HELPERS ───────────────────────────────────────────────────────────
+# ------ LOGGING HELPERS ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 function Log($msg)   { Write-Host "`n==> $msg" -ForegroundColor Cyan }
 function Ok($msg)    { Write-Host "    OK: $msg" -ForegroundColor Green }
 function Warn($msg)  { Write-Host "    WARN: $msg" -ForegroundColor Yellow }
 function Err($msg)   { Write-Host "`n[ERROR] $msg" -ForegroundColor Red; exit 1 }
-function Clean($val) { if ($null -eq $val) { return "" }; return ([string]$val).Trim() }
+function Clean($val) {
+    if ($null -eq $val) { return "" }
+    $s = ([string]$val).Trim()
+    if ($s -eq "None") { return "" }
+    return $s
+}
 function Write-JsonFile($path, $content) {
     $parent = Split-Path $path
     if ($parent -and -not (Test-Path $parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
     [System.IO.File]::WriteAllText($path, $content, (New-Object System.Text.UTF8Encoding($false)))
 }
 
-# ── 0. IDENTITY & ACCOUNT AUTO-DETECTION ───────────────────────────────────────
+# ------ 0. IDENTITY & ACCOUNT AUTO-DETECTION ---------------------------------------------------------------------------------------------------------------------
 Log "Checking active AWS CLI credentials..."
 try {
     $callerIdentityJson = aws sts get-caller-identity --output json 2>$null
@@ -49,7 +54,7 @@ try {
     Err "AWS CLI is not logged in or token is expired.`nPlease run 'aws configure' (or 'aws login') with credentials for your new AWS account first."
 }
 
-# ── CONFIGURATION & SECRETS (Loaded securely from .env.deploy) ───────────────
+# ------ CONFIGURATION & SECRETS (Loaded securely from .env.deploy) ---------------------------------------------
 $deployEnvPath = Join-Path $PSScriptRoot ".env.deploy"
 if (-not (Test-Path $deployEnvPath)) {
     Err "Missing configuration file '.env.deploy'!`nTo keep your secrets safe in a public repository, copy '.env.deploy.template' to '.env.deploy' and enter your Supabase & GitHub keys.`n('.env.deploy' is git-ignored and will never be committed to GitHub)."
@@ -85,13 +90,13 @@ foreach ($req in @("SUPABASE_URL", "SUPABASE_SERVICE_KEY", "SUPABASE_ANON_KEY", 
     }
 }
 
-$AWS_REGION      = "ap-southeast-2"
+$AWS_REGION      = "ap-south-1"
 $KEY_NAME        = "servhub-key"
 $KEY_PATH        = "$HOME\Downloads\$KEY_NAME.pem"
 $SG_NAME         = "servhub-sg"
 $INSTANCE_NAME   = "servhub-prod"
 $INSTANCE_TYPE   = "t4g.medium"
-$AMI_ID          = "ami-0be7d1b5b9749d43a"     # Ubuntu 26.04 LTS ARM64 ap-southeast-2
+$AMI_ID          = "ami-060a59f869a11dca4"     # Ubuntu 24.04 LTS ARM64 ap-south-1
 
 $EIP_NAME        = "servhub-eip"
 $IAM_ROLE_NAME   = "servhub-ec2-role"
@@ -106,14 +111,20 @@ $SQS_QUEUE_NAME  = "servhub-mini-builds"
 $SQS_DLQ_NAME    = "servhub-mini-builds-dlq"
 
 $CW_LOG_API      = "/servhub/api"
-$CW_LOG_BUILDER  = "/servhub/builder"
+$CW_LOG_BUILDER  = "/ecs/servhub-mini-builder"
+
+$ECS_CLUSTER     = "servhub-mini-cluster"
+$ECS_SERVICE     = "servhub-mini-builder-service"
+$ECS_TASK_FAMILY = "servhub-mini-builder"
+$ECS_TASK_ROLE   = "servhub-mini-builder-task-role"
+$ECS_EXEC_ROLE   = "ecsTaskExecutionRole"
 
 ################################################################################
-# PHASE 1 — AWS INFRASTRUCTURE (Provisioned once, skipped with -Resume)
+# PHASE 1 --- AWS INFRASTRUCTURE (Provisioned once, skipped with -Resume)
 ################################################################################
 if (-not $Resume) {
 
-    # ── 1a. IAM Role & Instance Profile for EC2 ───────────────────────────────
+    # ------ 1a. IAM Role & Instance Profile for EC2 ---------------------------------------------------------------------------------------------
     Log "Configuring EC2 IAM Instance Profile (Zero static keys): $IAM_PROFILE_NAME"
     $trustPath = Join-Path $PSScriptRoot "infra/ec2-trust-policy.json"
     $trustDoc = '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
@@ -145,7 +156,16 @@ if (-not $Resume) {
             @{
                 Sid = "ECRAccess"
                 Effect = "Allow"
-                Action = @("ecr:GetAuthorizationToken","ecr:BatchCheckLayerAvailability","ecr:GetDownloadUrlForLayer","ecr:BatchGetImage")
+                Action = @(
+                    "ecr:GetAuthorizationToken",
+                    "ecr:BatchCheckLayerAvailability",
+                    "ecr:GetDownloadUrlForLayer",
+                    "ecr:BatchGetImage",
+                    "ecr:PutImage",
+                    "ecr:InitiateLayerUpload",
+                    "ecr:UploadLayerPart",
+                    "ecr:CompleteLayerUpload"
+                )
                 Resource = "*"
             },
             @{
@@ -175,7 +195,7 @@ if (-not $Resume) {
         Ok "IAM Profile already exists: $IAM_PROFILE_NAME"
     }
 
-    # ── 1b. S3 Bucket ─────────────────────────────────────────────────────────
+    # ------ 1b. S3 Bucket ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     Log "Checking S3 Bucket: $S3_BUCKET"
     $foundBucket = Clean (aws s3api list-buckets --query "Buckets[?Name=='$S3_BUCKET'].Name" --output text)
     if (-not $foundBucket -or $foundBucket -eq "None") {
@@ -191,7 +211,7 @@ if (-not $Resume) {
         Ok "S3 Bucket already exists: $S3_BUCKET"
     }
 
-    # ── 1c. SQS Queues (Main + DLQ) ───────────────────────────────────────────
+    # ------ 1c. SQS Queues (Main + DLQ) ---------------------------------------------------------------------------------------------------------------------------------
     Log "Checking SQS DLQ: $SQS_DLQ_NAME"
     $dlqUrl = Clean (aws sqs list-queues --queue-name-prefix $SQS_DLQ_NAME --region $AWS_REGION --query "QueueUrls[?ends_with(@, '/$SQS_DLQ_NAME')]" --output text)
     if (-not $dlqUrl -or $dlqUrl -eq "None") {
@@ -222,7 +242,7 @@ if (-not $Resume) {
         Ok "Main Queue updated: $mainQueueUrl"
     }
 
-    # ── 1d. CloudWatch Log Groups ─────────────────────────────────────────────
+    # ------ 1d. CloudWatch Log Groups ---------------------------------------------------------------------------------------------------------------------------------------
     Log "Checking CloudWatch Log Groups"
     foreach ($lg in @($CW_LOG_API, $CW_LOG_BUILDER)) {
         $lgExists = aws logs describe-log-groups --log-group-name-prefix $lg --region $AWS_REGION --query "logGroups[?logGroupName=='$lg'].logGroupName" --output text 2>$null
@@ -235,10 +255,62 @@ if (-not $Resume) {
         }
     }
 
-    # ── 1e. Key Pair ──────────────────────────────────────────────────────────
+    # ------ 1d2. ECS Cluster & IAM Roles for Fargate Spot ---------------------------------------------------------------------------
+    Log "Checking ECS Cluster: $ECS_CLUSTER"
+    $clusterCheck = Clean (aws ecs describe-clusters --clusters $ECS_CLUSTER --region $AWS_REGION --query "clusters[?status=='ACTIVE'].clusterName" --output text 2>$null)
+    if (-not $clusterCheck -or $clusterCheck -eq "None") {
+        aws ecs create-cluster --cluster-name $ECS_CLUSTER --capacity-providers FARGATE FARGATE_SPOT --region $AWS_REGION | Out-Null
+        Ok "Created ECS Cluster: $ECS_CLUSTER"
+    } else {
+        aws ecs put-cluster-capacity-providers --cluster $ECS_CLUSTER --capacity-providers FARGATE FARGATE_SPOT --default-capacity-provider-strategy capacityProvider=FARGATE_SPOT,weight=1 --region $AWS_REGION 2>$null | Out-Null
+        Ok "ECS Cluster already exists: $ECS_CLUSTER"
+    }
+
+    Log "Checking ECS Execution Role: $ECS_EXEC_ROLE"
+    $execRoleCheck = Clean (aws iam list-roles --query "Roles[?RoleName=='$ECS_EXEC_ROLE'].RoleName" --output text 2>$null)
+    if (-not $execRoleCheck -or $execRoleCheck -eq "None") {
+        $ecsTrustDoc = '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
+        $ecsTrustPath = Join-Path $PSScriptRoot "infra/task-trust-policy.json"
+        Write-JsonFile $ecsTrustPath $ecsTrustDoc
+        aws iam create-role --role-name $ECS_EXEC_ROLE --assume-role-policy-document "file://$ecsTrustPath" | Out-Null
+        aws iam attach-role-policy --role-name $ECS_EXEC_ROLE --policy-arn "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy" | Out-Null
+        Ok "Created ECS Execution Role: $ECS_EXEC_ROLE"
+    } else {
+        Ok "ECS Execution Role already exists: $ECS_EXEC_ROLE"
+    }
+
+    Log "Checking ECS Task Role: $ECS_TASK_ROLE"
+    $taskRoleCheck = Clean (aws iam list-roles --query "Roles[?RoleName=='$ECS_TASK_ROLE'].RoleName" --output text 2>$null)
+    if (-not $taskRoleCheck -or $taskRoleCheck -eq "None") {
+        $taskTrustPath = Join-Path $PSScriptRoot "infra/task-trust-policy.json"
+        aws iam create-role --role-name $ECS_TASK_ROLE --assume-role-policy-document "file://$taskTrustPath" | Out-Null
+        $taskPolicyDoc = @{
+            Version = "2012-10-17"
+            Statement = @(
+                @{
+                    Effect = "Allow"
+                    Action = @("sqs:ReceiveMessage","sqs:DeleteMessage","sqs:ChangeMessageVisibility","sqs:GetQueueAttributes")
+                    Resource = "arn:aws:sqs:${AWS_REGION}:${AWS_ACCOUNT}:*"
+                },
+                @{
+                    Effect = "Allow"
+                    Action = @("s3:PutObject","s3:GetObject","s3:DeleteObject","s3:ListBucket")
+                    Resource = @("arn:aws:s3:::$S3_BUCKET","arn:aws:s3:::$S3_BUCKET/*")
+                }
+            )
+        } | ConvertTo-Json -Depth 10
+        $taskPolPath = Join-Path $PSScriptRoot "infra/builder-task-policy.json"
+        Write-JsonFile $taskPolPath $taskPolicyDoc
+        aws iam put-role-policy --role-name $ECS_TASK_ROLE --policy-name "BuilderTaskPolicy" --policy-document "file://$taskPolPath" | Out-Null
+        Ok "Created ECS Task Role: $ECS_TASK_ROLE"
+    } else {
+        Ok "ECS Task Role already exists: $ECS_TASK_ROLE"
+    }
+
+    # ------ 1e. Key Pair ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     Log "Checking EC2 key pair: $KEY_NAME"
     $existingKey = Clean (aws ec2 describe-key-pairs --query "KeyPairs[?KeyName=='$KEY_NAME'].KeyName" --region $AWS_REGION --output text)
-    if ($existingKey -and $existingKey -ne "None" -and (Test-Path $KEY_PATH)) {
+    if ($existingKey -and (Test-Path $KEY_PATH)) {
         Ok "Key pair already exists at: $KEY_PATH"
     } else {
         if (Test-Path $KEY_PATH) {
@@ -246,27 +318,27 @@ if (-not $Resume) {
             Remove-Item -Force $KEY_PATH -ErrorAction SilentlyContinue
         }
         aws ec2 delete-key-pair --key-name $KEY_NAME --region $AWS_REGION 2>$null | Out-Null
-        $keyMat = Clean (aws ec2 create-key-pair `
+        $keyMatLines = aws ec2 create-key-pair `
             --key-name $KEY_NAME `
             --query "KeyMaterial" `
             --output text `
-            --region $AWS_REGION)
-        $keyMat = ($keyMat -split "\r?\n") -join "`n"
-        [System.IO.File]::WriteAllText($KEY_PATH, $keyMat + "`n", [System.Text.Encoding]::ASCII)
+            --region $AWS_REGION
+        $keyMat = ($keyMatLines -join "`n") + "`n"
+        [System.IO.File]::WriteAllText($KEY_PATH, $keyMat, [System.Text.Encoding]::ASCII)
         icacls $KEY_PATH /inheritance:r /grant:r "${env:USERNAME}:R" | Out-Null
         Ok "Created and saved key to $KEY_PATH"
     }
 
-    # ── 1f. Security Group ────────────────────────────────────────────────────
+    # ------ 1f. Security Group ------------------------------------------------------------------------------------------------------------------------------------------------------------
     Log "Checking security group: $SG_NAME"
-    $existingSG = aws ec2 describe-security-groups `
+    $existingSG = Clean (aws ec2 describe-security-groups `
         --filters "Name=group-name,Values=$SG_NAME" `
         --query "SecurityGroups[0].GroupId" `
         --output text `
-        --region $AWS_REGION 2>$null
+        --region $AWS_REGION 2>$null)
 
-    if ($existingSG -and $existingSG -ne "None") {
-        $SG_ID = Clean $existingSG
+    if ($existingSG) {
+        $SG_ID = $existingSG
         Ok "Security group already exists: $SG_ID"
     } else {
         $SG_ID = Clean (aws ec2 create-security-group `
@@ -284,16 +356,15 @@ if (-not $Resume) {
         Ok "Inbound rules configured (SSH, HTTP, HTTPS)"
     }
 
-    # ── 1g. Launch EC2 Instance ───────────────────────────────────────────────
+    # ------ 1g. Launch EC2 Instance ---------------------------------------------------------------------------------------------------------------------------------------------
     Log "Checking for existing EC2 instance: $INSTANCE_NAME"
-    $INSTANCE_ID = aws ec2 describe-instances `
+    $INSTANCE_ID = Clean (aws ec2 describe-instances `
         --filters "Name=tag:Name,Values=$INSTANCE_NAME" "Name=instance-state-name,Values=running,pending,stopped" `
         --query "Reservations[0].Instances[0].InstanceId" `
         --output text `
-        --region $AWS_REGION 2>$null
+        --region $AWS_REGION 2>$null)
 
-    if ($INSTANCE_ID -and $INSTANCE_ID -ne "None") {
-        $INSTANCE_ID = Clean $INSTANCE_ID
+    if ($INSTANCE_ID) {
         $instData = aws ec2 describe-instances --instance-ids $INSTANCE_ID --query "Reservations[0].Instances[0]" --output json --region $AWS_REGION 2>$null | ConvertFrom-Json
         $instState = Clean $instData.State.Name
         $curType   = Clean $instData.InstanceType
@@ -357,7 +428,7 @@ if (-not $Resume) {
         } catch {}
     }
 
-    # ── 1h. Elastic IP (Permanent Public IP) ──────────────────────────────────
+    # ------ 1h. Elastic IP (Permanent Public IP) ------------------------------------------------------------------------------------------------------
     Log "Checking Elastic IP: $EIP_NAME"
     $existingEip = aws ec2 describe-addresses `
         --filters "Name=tag:Name,Values=$EIP_NAME" `
@@ -387,7 +458,7 @@ if (-not $Resume) {
         --region $AWS_REGION | Out-Null
     Ok "Permanent Elastic IP active: $EC2_IP"
 
-    # ── 1i. ECR Repositories ──────────────────────────────────────────────────
+    # ------ 1i. ECR Repositories ------------------------------------------------------------------------------------------------------------------------------------------------------
     Log "Checking ECR repositories"
     foreach ($repo in @($ECR_API, $ECR_BUILDER)) {
         $exists = Clean (aws ecr describe-repositories --query "repositories[?repositoryName=='$repo'].repositoryName" --region $AWS_REGION --output text 2>$null)
@@ -400,7 +471,7 @@ if (-not $Resume) {
     }
 
 } else {
-    # Resume mode — look up existing Elastic IP & SQS Queue URL
+    # Resume mode --- look up existing Elastic IP & SQS Queue URL
     Log "Resume mode: looking up Elastic IP and SQS Queue"
     $existingEip = aws ec2 describe-addresses `
         --filters "Name=tag:Name,Values=$EIP_NAME" `
@@ -411,26 +482,35 @@ if (-not $Resume) {
     Ok "Found Elastic IP: $EC2_IP"
 
     $mainQueueUrl = Clean (aws sqs get-queue-url --queue-name $SQS_QUEUE_NAME --region $AWS_REGION --query "QueueUrl" --output text)
+    $existingSG = Clean (aws ec2 describe-security-groups --filters "Name=group-name,Values=$SG_NAME" --query "SecurityGroups[0].GroupId" --output text --region $AWS_REGION 2>$null)
+    if ($existingSG -and $existingSG -ne "None") { $SG_ID = $existingSG }
 }
 
 ################################################################################
-# PHASE 2 — SERVER PROVISIONING VIA SSH
+# PHASE 2 --- SERVER PROVISIONING VIA SSH
 ################################################################################
 
 function Remote($cmd) {
-    ssh -i $KEY_PATH -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=15 "ubuntu@$EC2_IP" $cmd
-    if ($LASTEXITCODE -ne 0) { Err "Remote command execution failed on EC2 (exit code: $LASTEXITCODE)." }
+    $normalized = (($cmd -replace "\r\n", "`n") -replace "\r", "`n").Trim() + "`n"
+    $tempSh = [System.IO.Path]::GetTempFileName()
+    [System.IO.File]::WriteAllBytes($tempSh, [System.Text.Encoding]::UTF8.GetBytes($normalized))
+    scp -i $KEY_PATH -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=yes $tempSh "ubuntu@${EC2_IP}:/tmp/remote_script.sh" | Out-Null
+    ssh -i $KEY_PATH -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=yes -n "ubuntu@$EC2_IP" "bash -e /tmp/remote_script.sh"
+    $exitCode = $LASTEXITCODE
+    ssh -i $KEY_PATH -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=yes -n "ubuntu@$EC2_IP" "rm -f /tmp/remote_script.sh" 2>$null | Out-Null
+    Remove-Item -Force $tempSh -ErrorAction SilentlyContinue
+    if ($exitCode -ne 0) { Err "Remote command execution failed on EC2 (exit code: $exitCode)." }
 }
 
 function Upload($local, $remote) {
-    scp -i $KEY_PATH -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -r $local "ubuntu@${EC2_IP}:${remote}"
+    scp -i $KEY_PATH -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=yes -r $local "ubuntu@${EC2_IP}:${remote}"
 }
 
 Log "Verifying SSH connection to $EC2_IP..."
 $sshSuccess = $false
 for ($i = 1; $i -le 30; $i++) {
     try {
-        $sshTest = ssh -i $KEY_PATH -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5 "ubuntu@$EC2_IP" "echo ready" 2>$null
+        $sshTest = ssh -i $KEY_PATH -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=yes -o ConnectTimeout=5 "ubuntu@$EC2_IP" "echo ready" 2>$null
         if ($sshTest -match "ready") {
             $sshSuccess = $true
             break
@@ -442,29 +522,29 @@ for ($i = 1; $i -le 30; $i++) {
 if (-not $sshSuccess) { Err "SSH connection to ubuntu@$EC2_IP timed out. Check security group rules." }
 Ok "SSH connected successfully"
 
-# ── 2a. Install Docker, Nginx, AWS CLI on EC2 ─────────────────────────────────
+# ------ 2a. Install Docker, Nginx, AWS CLI on EC2 ---------------------------------------------------------------------------------------------------
 Log "Ensuring Docker, Nginx, and AWS CLI are installed on EC2"
 Remote @"
-sudo apt-get update -q && \
-sudo apt-get install -y -q nginx unzip curl && \
+sudo apt-get update -q
+sudo apt-get install -y -q nginx unzip curl
 if ! command -v aws &> /dev/null; then
     ARCH=`$(uname -m)
-    curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-`$ARCH.zip" -o "/tmp/awscliv2.zip" && \
-    unzip -q /tmp/awscliv2.zip -d /tmp && \
-    sudo /tmp/aws/install && \
+    curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-`$ARCH.zip" -o "/tmp/awscliv2.zip"
+    unzip -q /tmp/awscliv2.zip -d /tmp
+    sudo /tmp/aws/install
     rm -rf /tmp/aws /tmp/awscliv2.zip
-fi && \
+fi
 if ! command -v docker &> /dev/null; then
     curl -fsSL https://get.docker.com | sudo sh
     sudo usermod -aG docker ubuntu
-fi && \
-sudo systemctl enable --now nginx && \
+fi
+sudo systemctl enable --now nginx
 sudo systemctl enable --now docker
 "@
 Ok "Packages installed and active"
 
 ################################################################################
-# PHASE 3 — BUILD & RUN CONTAINER SERVICES DIRECTLY ON EC2
+# PHASE 3 --- BUILD & RUN CONTAINER SERVICES DIRECTLY ON EC2
 ################################################################################
 
 Log "Packaging API and Builder source code for EC2 build"
@@ -474,26 +554,26 @@ tar --exclude="node_modules" --exclude="dist" -czf $apiTar -C (Join-Path $PSScri
 tar --exclude="node_modules" --exclude="dist" -czf $builderTar -C (Join-Path $PSScriptRoot "apps\builder") .
 
 Log "Uploading application sources to EC2..."
-scp -i $KEY_PATH -o StrictHostKeyChecking=no $apiTar "ubuntu@${EC2_IP}:/tmp/api.tar.gz"
-scp -i $KEY_PATH -o StrictHostKeyChecking=no $builderTar "ubuntu@${EC2_IP}:/tmp/builder.tar.gz"
+scp -i $KEY_PATH -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=yes $apiTar "ubuntu@${EC2_IP}:/tmp/api.tar.gz"
+scp -i $KEY_PATH -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=yes $builderTar "ubuntu@${EC2_IP}:/tmp/builder.tar.gz"
 Remove-Item -Force $apiTar, $builderTar -ErrorAction SilentlyContinue
 
 Log "Building Docker containers on EC2 and pushing to ECR..."
 Remote @"
-sudo rm -rf /tmp/build-api /tmp/build-builder && \
-mkdir -p /tmp/build-api /tmp/build-builder && \
-tar -xzf /tmp/api.tar.gz -C /tmp/build-api && \
-tar -xzf /tmp/builder.tar.gz -C /tmp/build-builder && \
-sudo docker build -t ${ECR_API}:latest -t $ECR_BASE/${ECR_API}:latest /tmp/build-api && \
-sudo docker build -t ${ECR_BUILDER}:latest -t $ECR_BASE/${ECR_BUILDER}:latest /tmp/build-builder && \
-sudo sh -c 'aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_BASE' && \
-sudo docker push $ECR_BASE/${ECR_API}:latest && \
-sudo docker push $ECR_BASE/${ECR_BUILDER}:latest && \
+sudo rm -rf /tmp/build-api /tmp/build-builder
+mkdir -p /tmp/build-api /tmp/build-builder
+tar -xzf /tmp/api.tar.gz -C /tmp/build-api
+tar -xzf /tmp/builder.tar.gz -C /tmp/build-builder
+sudo docker build -t ${ECR_API}:latest -t $ECR_BASE/${ECR_API}:latest /tmp/build-api
+sudo docker build -t ${ECR_BUILDER}:latest -t $ECR_BASE/${ECR_BUILDER}:latest /tmp/build-builder
+sudo sh -c "aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_BASE"
+sudo docker push $ECR_BASE/${ECR_API}:latest
+sudo docker push $ECR_BASE/${ECR_BUILDER}:latest
 sudo rm -rf /tmp/build-api /tmp/build-builder /tmp/api.tar.gz /tmp/builder.tar.gz
 "@
 Ok "Docker containers built and pushed to ECR successfully"
 
-# ── 3a. Write Runtime Environment File (NO STATIC AWS KEYS NEEDED!) ───────────
+# ------ 3a. Write Runtime Environment File (NO STATIC AWS KEYS NEEDED!) ---------------------------------
 Log "Writing runtime environment file on EC2 (/etc/servhub.env)"
 $envContent = @"
 DATABASE_URL=$DATABASE_URL
@@ -512,13 +592,13 @@ PORT=3001
 HOST=0.0.0.0
 NODE_ENV=production
 "@
-$envContent | ssh -i $KEY_PATH -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "ubuntu@$EC2_IP" "sudo tee /etc/servhub.env > /dev/null && sudo chmod 600 /etc/servhub.env"
+$envContent | ssh -i $KEY_PATH -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=yes "ubuntu@$EC2_IP" "sudo tee /etc/servhub.env > /dev/null && sudo chmod 600 /etc/servhub.env"
 Ok "Environment file written securely"
-# ── 3b. Run Containers with CloudWatch Logging ─────────────────────────────────
-Log "Starting Docker containers with CloudWatch logging"
+# ------ 3b. Run API Container on EC2 with CloudWatch Logging ------------------------------------------------------------------
+Log "Starting Fastify API container with CloudWatch logging on EC2"
 Remote @"
-sudo docker stop servhub-api servhub-builder 2>/dev/null || true && \
-sudo docker rm   servhub-api servhub-builder 2>/dev/null || true && \
+sudo docker stop servhub-api servhub-builder 2>/dev/null || true
+sudo docker rm   servhub-api servhub-builder 2>/dev/null || true
 sudo docker run -d \
   --name servhub-api \
   --restart always \
@@ -529,22 +609,99 @@ sudo docker run -d \
   --log-opt awslogs-group=$CW_LOG_API \
   --log-opt awslogs-stream=servhub-api \
   --log-opt awslogs-create-group=true \
-  $ECR_BASE/${ECR_API}:latest && \
-sudo docker run -d \
-  --name servhub-builder \
-  --restart always \
-  --env-file /etc/servhub.env \
-  --log-driver awslogs \
-  --log-opt awslogs-region=$AWS_REGION \
-  --log-opt awslogs-group=$CW_LOG_BUILDER \
-  --log-opt awslogs-stream=servhub-builder \
-  --log-opt awslogs-create-group=true \
-  $ECR_BASE/${ECR_BUILDER}:latest
+  $ECR_BASE/${ECR_API}:latest
 "@
-Ok "Containers running with automatic CloudWatch logging via EC2 IAM role"
+Ok "Fastify API running on EC2 with automatic CloudWatch logging via EC2 IAM role"
+
+# ------ 3c. Deploy Builder Task to ECS Fargate Spot ------------------------------------------------------------------------------------------------
+Log "Deploying ServHub Builder to ECS Fargate Spot (Zero-Cost Optimization)..."
+
+Log "Registering ECS Task Definition: $ECS_TASK_FAMILY (Fargate ARM64)"
+$taskDefDoc = @{
+    family = $ECS_TASK_FAMILY
+    networkMode = "awsvpc"
+    requiresCompatibilities = @("FARGATE")
+    cpu = "1024"
+    memory = "2048"
+    executionRoleArn = "arn:aws:iam::${AWS_ACCOUNT}:role/${ECS_EXEC_ROLE}"
+    taskRoleArn = "arn:aws:iam::${AWS_ACCOUNT}:role/${ECS_TASK_ROLE}"
+    runtimePlatform = @{
+        cpuArchitecture = "ARM64"
+        operatingSystemFamily = "LINUX"
+    }
+    containerDefinitions = @(
+        @{
+            name = "servhub-builder"
+            image = "$ECR_BASE/${ECR_BUILDER}:latest"
+            essential = $true
+            environment = @(
+                @{ name = "AWS_REGION"; value = $AWS_REGION },
+                @{ name = "SQS_QUEUE_URL"; value = $mainQueueUrl },
+                @{ name = "S3_BUCKET_NAME"; value = $S3_BUCKET },
+                @{ name = "PLATFORM_DOMAIN"; value = $DOMAIN },
+                @{ name = "SUPABASE_URL"; value = $SUPABASE_URL },
+                @{ name = "SUPABASE_SERVICE_ROLE_KEY"; value = $SUPABASE_SERVICE_KEY }
+            )
+            logConfiguration = @{
+                logDriver = "awslogs"
+                options = @{
+                    "awslogs-group"         = $CW_LOG_BUILDER
+                    "awslogs-region"        = $AWS_REGION
+                    "awslogs-stream-prefix" = "ecs"
+                }
+            }
+        }
+    )
+} | ConvertTo-Json -Depth 10
+
+$taskDefFile = Join-Path $PSScriptRoot "infra/fargate-task-def.json"
+Write-JsonFile $taskDefFile $taskDefDoc
+
+$regTaskDef = aws ecs register-task-definition --cli-input-json "file://$taskDefFile" --region $AWS_REGION 2>$null | ConvertFrom-Json
+if (-not $regTaskDef -or -not $regTaskDef.taskDefinition.taskDefinitionArn) {
+    Err "Failed to register ECS Task Definition."
+}
+$taskDefArn = $regTaskDef.taskDefinition.taskDefinitionArn
+Ok "Registered Task Definition: $taskDefArn"
+
+# Get default VPC subnets
+$subnets = (aws ec2 describe-subnets --filters "Name=default-for-az,Values=true" --region $AWS_REGION --query "Subnets[*].SubnetId" --output text) -split "`t| " | Where-Object { $_.Trim() }
+
+$netConfigFile = Join-Path $PSScriptRoot "infra/ecs-network-config.json"
+Write-JsonFile $netConfigFile (@{
+    awsvpcConfiguration = @{
+        subnets = @($subnets)
+        securityGroups = @($SG_ID)
+        assignPublicIp = "ENABLED"
+    }
+} | ConvertTo-Json)
+
+Log "Deploying ECS Fargate Spot Service: $ECS_SERVICE..."
+$svcCheck = Clean (aws ecs describe-services --cluster $ECS_CLUSTER --services $ECS_SERVICE --region $AWS_REGION --query "services[?status=='ACTIVE'].serviceName" --output text 2>$null)
+
+if (-not $svcCheck -or $svcCheck -eq "None") {
+    aws ecs create-service `
+        --cluster $ECS_CLUSTER `
+        --service-name $ECS_SERVICE `
+        --task-definition $ECS_TASK_FAMILY `
+        --desired-count 1 `
+        --capacity-provider-strategy "capacityProvider=FARGATE_SPOT,weight=1" `
+        --network-configuration "file://$netConfigFile" `
+        --region $AWS_REGION | Out-Null
+    Ok "Created ECS Fargate Spot Service: $ECS_SERVICE"
+} else {
+    aws ecs update-service `
+        --cluster $ECS_CLUSTER `
+        --service $ECS_SERVICE `
+        --task-definition $ECS_TASK_FAMILY `
+        --force-new-deployment `
+        --network-configuration "file://$netConfigFile" `
+        --region $AWS_REGION | Out-Null
+    Ok "Updated ECS Fargate Spot Service: $ECS_SERVICE with latest task definition"
+}
 
 ################################################################################
-# PHASE 4 — BUILD & DEPLOY DASHBOARD FRONTEND
+# PHASE 4 --- BUILD & DEPLOY DASHBOARD FRONTEND
 ################################################################################
 
 Log "Building dashboard frontend"
@@ -566,20 +723,20 @@ Log "Uploading Dashboard static files"
 Remote "sudo mkdir -p /var/www/dashboard && sudo chmod 777 /var/www/dashboard"
 $tarPath = Join-Path $PSScriptRoot "apps\dashboard\dist.tar.gz"
 tar -czf $tarPath -C (Join-Path $PSScriptRoot "apps\dashboard\dist") .
-scp -i $KEY_PATH -o StrictHostKeyChecking=no $tarPath "ubuntu@${EC2_IP}:/tmp/dist.tar.gz"
+scp -i $KEY_PATH -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=yes $tarPath "ubuntu@${EC2_IP}:/tmp/dist.tar.gz"
 Remove-Item -Force $tarPath -ErrorAction SilentlyContinue
 Remote "sudo tar -xzf /tmp/dist.tar.gz -C /var/www/dashboard && sudo rm -f /tmp/dist.tar.gz && sudo chown -R www-data:www-data /var/www/dashboard"
 Ok "Dashboard files uploaded"
 
-# ── 4e. Nginx Reverse Proxy Configuration with SSL ─────────────────────────────
+# ------ 4e. Nginx Reverse Proxy Configuration with SSL ---------------------------------------------------------------------------------------
 Log "Configuring Nginx reverse proxy with SSL"
 Remote @"
-sudo mkdir -p /etc/nginx/ssl && \
+sudo mkdir -p /etc/nginx/ssl
 if [ ! -f /etc/nginx/ssl/servhub.crt ]; then
     sudo openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
       -keyout /etc/nginx/ssl/servhub.key \
       -out /etc/nginx/ssl/servhub.crt \
-      -subj '/C=US/ST=State/L=City/O=ServHub/CN=*.$DOMAIN' && \
+      -subj '/C=US/ST=State/L=City/O=ServHub/CN=*.$DOMAIN'
     sudo chmod 600 /etc/nginx/ssl/servhub.key
 fi
 "@
@@ -629,12 +786,35 @@ server {
         proxy_connect_timeout 10s;
     }
 }
+
+server {
+    listen 80;
+    listen 443 ssl;
+    server_name ~^(?<subdomain>[a-zA-Z0-9_-]+)\.$DOMAIN$;
+
+    ssl_certificate /etc/nginx/ssl/servhub.crt;
+    ssl_certificate_key /etc/nginx/ssl/servhub.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    location / {
+        proxy_pass http://localhost:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Host              `$host;
+        proxy_set_header X-Real-IP         `$remote_addr;
+        proxy_set_header X-Forwarded-For   `$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto `$scheme;
+        proxy_set_header Upgrade           `$http_upgrade;
+        proxy_set_header Connection        "upgrade";
+        proxy_read_timeout 120s;
+        proxy_connect_timeout 10s;
+    }
+}
 "@
-$nginxConf | ssh -i $KEY_PATH -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "ubuntu@$EC2_IP" "sudo tee /etc/nginx/sites-available/servhub > /dev/null"
+$nginxConf | ssh -i $KEY_PATH -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=yes "ubuntu@$EC2_IP" "sudo tee /etc/nginx/sites-available/servhub > /dev/null"
 Remote @"
-sudo ln -sf /etc/nginx/sites-available/servhub /etc/nginx/sites-enabled/servhub && \
-sudo rm -f /etc/nginx/sites-enabled/default && \
-sudo nginx -t && \
+sudo ln -sf /etc/nginx/sites-available/servhub /etc/nginx/sites-enabled/servhub
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t
 sudo systemctl reload nginx
 "@
 Ok "Nginx successfully configured with SSL and reloaded"
@@ -671,3 +851,4 @@ Write-Host "  App URL : https://$APP_DOMAIN" -ForegroundColor Green
 Write-Host "  API URL : https://$API_DOMAIN" -ForegroundColor Green
 Write-Host "==================================================================" -ForegroundColor Green
 Write-Host ""
+

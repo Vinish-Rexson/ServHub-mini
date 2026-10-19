@@ -4,7 +4,7 @@
                       {
                           "Effect":  "Allow",
                           "Sid":  "SQSAccess",
-                          "Resource":  "arn:aws:sqs:ap-southeast-2:681842289425:*",
+                          "Resource":  "arn:aws:sqs:ap-south-1:362095365756:*",
                           "Action":  [
                                          "sqs:SendMessage",
                                          "sqs:ReceiveMessage",
@@ -17,8 +17,8 @@
                           "Effect":  "Allow",
                           "Sid":  "S3Access",
                           "Resource":  [
-                                           "arn:aws:s3:::servhub-mini-deployments-681842289425",
-                                           "arn:aws:s3:::servhub-mini-deployments-681842289425/*"
+                                           "arn:aws:s3:::servhub-mini-deployments-362095365756",
+                                           "arn:aws:s3:::servhub-mini-deployments-362095365756/*"
                                        ],
                           "Action":  [
                                          "s3:PutObject",
@@ -35,7 +35,11 @@
                                          "ecr:GetAuthorizationToken",
                                          "ecr:BatchCheckLayerAvailability",
                                          "ecr:GetDownloadUrlForLayer",
-                                         "ecr:BatchGetImage"
+                                         "ecr:BatchGetImage",
+                                         "ecr:PutImage",
+                                         "ecr:InitiateLayerUpload",
+                                         "ecr:UploadLayerPart",
+                                         "ecr:CompleteLayerUpload"
                                      ]
                       },
                       {

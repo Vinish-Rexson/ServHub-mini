@@ -7,6 +7,7 @@ import { authRoutes } from "./routes/auth";
 import { deploymentRoutes } from "./routes/deployments";
 import { projectRoutes } from "./routes/projects";
 import { webhookRoutes } from "./routes/webhook";
+import { handleProjectProxy } from "./services/proxy";
 
 declare module "@fastify/jwt" {
   interface FastifyJWT {
@@ -24,6 +25,28 @@ declare module "@fastify/jwt" {
 async function buildServer() {
   const app = Fastify({
     logger: true,
+  });
+
+  // Handle project subdomain requests (e.g. project-slug.domain.com)
+  app.addHook("onRequest", async (req, reply) => {
+    const rawHost = (req.headers.host ?? req.hostname).toLowerCase().split(":")[0];
+    const apiDomain = (process.env.API_BASE_URL ? new URL(process.env.API_BASE_URL).hostname : "api-servhub.4istudios.in").toLowerCase();
+
+    // If request is not for the API domain and not localhost/IP, serve via project proxy
+    if (rawHost !== apiDomain && rawHost !== "localhost" && rawHost !== "127.0.0.1" && !rawHost.match(/^\d+\.\d+\.\d+\.\d+$/)) {
+      return handleProjectProxy(req, reply, rawHost);
+    }
+  });
+
+  app.setNotFoundHandler(async (req, reply) => {
+    const rawHost = (req.headers.host ?? req.hostname).toLowerCase().split(":")[0];
+    const apiDomain = (process.env.API_BASE_URL ? new URL(process.env.API_BASE_URL).hostname : "api-servhub.4istudios.in").toLowerCase();
+
+    if (rawHost !== apiDomain && rawHost !== "localhost" && rawHost !== "127.0.0.1" && !rawHost.match(/^\d+\.\d+\.\d+\.\d+$/)) {
+      return handleProjectProxy(req, reply, rawHost);
+    }
+
+    return reply.status(404).send({ error: "Not Found", message: `Route ${req.method}:${req.url} not found` });
   });
 
   await app.register(cors, {
