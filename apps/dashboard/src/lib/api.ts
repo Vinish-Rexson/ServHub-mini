@@ -64,8 +64,11 @@ export async function fetchApi<T = unknown>(endpoint: string, options: RequestIn
       headers,
       signal: options.signal ?? requestController?.signal,
     });
-  } catch {
-    throw new Error("Network error: unable to reach API server");
+  } catch (err: any) {
+    if (err?.name === "AbortError") {
+      throw new Error("Request timed out. Please try again.");
+    }
+    throw new Error(err?.message || "Network error: unable to reach API server");
   } finally {
     if (timeoutId) {
       clearTimeout(timeoutId);

@@ -46,7 +46,7 @@ export const Dashboard: React.FC = () => {
     try {
       setIsLoading(true);
       const controller = new AbortController();
-      timeout = setTimeout(() => controller.abort(), 10_000);
+      timeout = setTimeout(() => controller.abort(), 15_000);
       const data = await fetchApi<Project[]>("/projects", { signal: controller.signal });
       if (requestSeq === requestSeqRef.current) {
         setProjects(data);

@@ -96,7 +96,7 @@ export const DeploymentView: React.FC = () => {
 
     const loadData = async () => {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5_000);
+      const timeout = setTimeout(() => controller.abort(), 15_000);
       try {
         const depData = await fetchApi<DeploymentResponse>(`/deployments/${id}`, { signal: controller.signal });
         if (mountedRef.current) {

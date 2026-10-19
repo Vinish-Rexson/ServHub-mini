@@ -7,6 +7,8 @@ export type AuthenticatedUser = {
   email?: string;
 };
 
+const userCache = new Map<string, { user: AuthenticatedUser; expiresAt: number }>();
+
 export async function requireUser(
   request: FastifyRequest,
   reply: FastifyReply
@@ -22,6 +24,11 @@ export async function requireUser(
     if (!token) {
       reply.code(401).send({ error: "Unauthorized" });
       return null;
+    }
+
+    const cached = userCache.get(token);
+    if (cached && Date.now() < cached.expiresAt) {
+      return cached.user;
     }
 
     const supabase = getSupabaseServiceClient();
@@ -51,10 +58,14 @@ export async function requireUser(
       },
     });
 
-    return {
+    const authUser = {
       id: user.id,
       email: user.email,
     };
+
+    userCache.set(token, { user: authUser, expiresAt: Date.now() + 60_000 });
+
+    return authUser;
   } catch (error) {
     console.error("Auth error:", error);
     reply.code(401).send({ error: "Unauthorized" });
